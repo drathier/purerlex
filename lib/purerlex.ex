@@ -58,7 +58,7 @@ defmodule Mix.Tasks.Compile.Purerl do
 
     erl_files =
       purs_files
-      |> Stream.map(&String.replace(&1, ~r/\.purs\z/, ".erl"))
+      |> Stream.map(&String.replace_suffix(&1, ".purs", ".erl"))
       |> Enum.filter(&File.exists?/1)
 
     files = purs_files ++ erl_files
