@@ -54,7 +54,14 @@ defmodule Mix.Tasks.Compile.Purerl do
 
     cached = read_cache(project_root_probably)
 
-    files = Enum.flat_map(@file_paths, &Path.wildcard/1)
+    purs_files = Enum.flat_map(@file_paths, &Path.wildcard/1)
+
+    erl_files =
+      purs_files
+      |> Stream.map(&String.replace(&1, ~r/\.purs\z/, ".erl"))
+      |> Enum.filter(&File.exists?/1)
+
+    files = purs_files ++ erl_files
     stats = Enum.map(files, fn x -> {x, File.stat!(x).mtime} end)
 
     if cached == stats do
