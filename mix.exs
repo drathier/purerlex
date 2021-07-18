@@ -9,12 +9,14 @@ defmodule Purerlex.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       package: package(),
-      description: "PurerlEx allows you to automatically compile purerl code with mix, both in `mix compile` and with `recompile` in `iex -S mix`.",
+      description:
+        "PurerlEx allows you to automatically compile purerl code with mix, both in `mix compile` and with `recompile` in `iex -S mix`.",
       name: "PurerlEx",
       source_url: "https://github.com/drathier/purerlex",
       homepage_url: "https://github.com/drathier/purerlex",
       docs: [
-        main: "Purerlex", # The main page in the docs
+        # The main page in the docs
+        main: "Purerlex",
         extras: ["README.md"]
       ]
     ]

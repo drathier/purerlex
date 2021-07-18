@@ -21,7 +21,8 @@ defmodule Mix.Tasks.Compile.Purerl do
             compiler_name: "purerl-mix-compiler",
             details: nil,
             file: "spago",
-            message: "Couldn't find `spago` executable on path. Purerl mix compiler task will not work without it. Please install it on path or remove the :purerl compiler from mix.exs.",
+            message:
+              "Couldn't find `spago` executable on path. Purerl mix compiler task will not work without it. Please install it on path or remove the :purerl compiler from mix.exs.",
             position: nil,
             severity: :error
           }
@@ -32,8 +33,10 @@ defmodule Mix.Tasks.Compile.Purerl do
 
   defp read_cache(project_root_probably) do
     case File.read(project_root_probably <> "/" <> @cache_path) do
-      {:ok, res} -> :erlang.binary_to_term(res)
-      {:error, err} ->
+      {:ok, res} ->
+        :erlang.binary_to_term(res)
+
+      {:error, _err} ->
         ""
     end
   end
@@ -51,11 +54,22 @@ defmodule Mix.Tasks.Compile.Purerl do
 
     cached = read_cache(project_root_probably)
 
-    files = Enum.flat_map(@file_paths, &Path.wildcard/1)
+    purs_files = Enum.flat_map(@file_paths, &Path.wildcard/1)
+
+    erl_files =
+      purs_files
+      |> Stream.map(&String.replace_suffix(&1, ".purs", ".erl"))
+      |> Enum.filter(&File.exists?/1)
+
+    files = purs_files ++ erl_files
     stats = Enum.map(files, fn x -> {x, File.stat!(x).mtime} end)
 
     if cached == stats do
-      Mix.shell().info([@shell_prefix, "no non-dep files changed; skipping running spago to save time."])
+      Mix.shell().info([
+        @shell_prefix,
+        "no non-dep files changed; skipping running spago to save time."
+      ])
+
       {:ok, []}
     else
       build(project_root_probably, stats)
@@ -64,24 +78,25 @@ defmodule Mix.Tasks.Compile.Purerl do
 
   defp build(project_root_probably, stats) do
     cmd_str = "spago build"
-    Mix.shell().cmd(cmd_str, [stderr_to_stdout: true])
+
+    Mix.shell().cmd(cmd_str, stderr_to_stdout: true)
     |> case do
-         0 ->
-           write_cache(project_root_probably, stats)
-           {:ok, []}
+      0 ->
+        write_cache(project_root_probably, stats)
+        {:ok, []}
 
-         exit_status ->
-           error = %Mix.Task.Compiler.Diagnostic{
-             compiler_name: "purerl-mix-compiler",
-             details: nil,
-             file: "spago",
-             message: "non-zero exit code #{exit_status} from `#{cmd_str}`",
-             position: nil,
-             severity: :error
-           }
+      exit_status ->
+        error = %Mix.Task.Compiler.Diagnostic{
+          compiler_name: "purerl-mix-compiler",
+          details: nil,
+          file: "spago",
+          message: "non-zero exit code #{exit_status} from `#{cmd_str}`",
+          position: nil,
+          severity: :error
+        }
 
-           Mix.shell().info([:bright, :red, @shell_prefix, error.message, :reset])
-           {:error, [error]}
-       end
+        Mix.shell().info([:bright, :red, @shell_prefix, error.message, :reset])
+        {:error, [error]}
+    end
   end
 end
