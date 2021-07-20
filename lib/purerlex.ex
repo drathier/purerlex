@@ -5,8 +5,8 @@ defmodule Mix.Tasks.Compile.Purerl do
 
   @recursive true
 
-  @cache_path "output/.purerlex.cache"
-  @file_paths ["src/**/*.purs", "lib/**/*.purs", "test/**/*.purs"]
+  @default_cache_path "output/.purerlex.cache"
+  @default_file_paths ["src/**/*.purs", "lib/**/*.purs", "test/**/*.purs"]
   @shell_prefix "PurerlEx: "
 
   @impl Mix.Task.Compiler
@@ -33,8 +33,8 @@ defmodule Mix.Tasks.Compile.Purerl do
     end
   end
 
-  defp read_cache(project_root_probably) do
-    case File.read(project_root_probably <> "/" <> @cache_path) do
+  defp read_cache(config, project_root_probably) do
+    case File.read(project_root_probably <> "/" <> cache_path(config)) do
       {:ok, res} ->
         :erlang.binary_to_term(res)
 
@@ -43,8 +43,8 @@ defmodule Mix.Tasks.Compile.Purerl do
     end
   end
 
-  defp write_cache(project_root_probably, contents) do
-    path = project_root_probably <> "/" <> @cache_path
+  defp write_cache(config, project_root_probably, contents) do
+    path = project_root_probably <> "/" <> cache_path(config)
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, :erlang.term_to_binary(contents))
   end
@@ -54,9 +54,12 @@ defmodule Mix.Tasks.Compile.Purerl do
 
     info(config, [@shell_prefix, "assuming the project root is `#{project_root_probably}`"])
 
-    cached = read_cache(project_root_probably)
+    cached = read_cache(config, project_root_probably)
 
-    purs_files = Enum.flat_map(@file_paths, &Path.wildcard/1)
+    purs_files =
+      config
+      |> file_paths()
+      |> Enum.flat_map(&Path.wildcard/1)
 
     erl_files =
       purs_files
@@ -74,17 +77,17 @@ defmodule Mix.Tasks.Compile.Purerl do
 
       {:ok, []}
     else
-      build(project_root_probably, stats)
+      build(config, project_root_probably, stats)
     end
   end
 
-  defp build(project_root_probably, stats) do
-    cmd_str = "spago build"
+  defp build(config, project_root_probably, stats) do
+    cmd_str = build_command(config)
 
     Mix.shell().cmd(cmd_str, stderr_to_stdout: true)
     |> case do
       0 ->
-        write_cache(project_root_probably, stats)
+        write_cache(config, project_root_probably, stats)
         {:ok, []}
 
       exit_status ->
@@ -102,9 +105,33 @@ defmodule Mix.Tasks.Compile.Purerl do
     end
   end
 
+  defp build_command(config) do
+    ["spago build" | spago_options(config)]
+    |> Enum.join(" ")
+    |> String.trim_trailing()
+  end
+
   defp info(config, data) do
-    unless Keyword.get(config, :quiet, false) do
+    unless quiet(config) do
       Mix.shell().info(data)
     end
+  end
+
+  defp quiet(config) do
+    Keyword.get(config, :quiet, false)
+  end
+
+  defp file_paths(config) do
+    Keyword.get(config, :file_paths, @default_file_paths)
+  end
+
+  defp spago_options(config) do
+    config
+    |> Keyword.get(:spago_options, [])
+    |> List.wrap()
+  end
+
+  defp cache_path(config) do
+    Keyword.get(config, :cache_path, @default_cache_path)
   end
 end
