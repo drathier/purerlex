@@ -11,8 +11,10 @@ defmodule Mix.Tasks.Compile.Purerl do
 
   @impl Mix.Task.Compiler
   def run(_argv) do
+    config = Mix.Project.config() |> Keyword.get(:purerlex, Keyword.new())
+
     if System.find_executable("spago") do
-      cached_build()
+      cached_build(config)
     else
       {
         :error,
@@ -47,10 +49,10 @@ defmodule Mix.Tasks.Compile.Purerl do
     File.write!(path, :erlang.term_to_binary(contents))
   end
 
-  defp cached_build() do
+  defp cached_build(config) do
     project_root_probably = Path.expand(File.cwd!())
 
-    Mix.shell().info([@shell_prefix, "assuming the project root is `#{project_root_probably}`"])
+    info(config, [@shell_prefix, "assuming the project root is `#{project_root_probably}`"])
 
     cached = read_cache(project_root_probably)
 
@@ -65,7 +67,7 @@ defmodule Mix.Tasks.Compile.Purerl do
     stats = Enum.map(files, fn x -> {x, File.stat!(x).mtime} end)
 
     if cached == stats do
-      Mix.shell().info([
+      info(config, [
         @shell_prefix,
         "no non-dep files changed; skipping running spago to save time."
       ])
@@ -95,8 +97,14 @@ defmodule Mix.Tasks.Compile.Purerl do
           severity: :error
         }
 
-        Mix.shell().info([:bright, :red, @shell_prefix, error.message, :reset])
+        Mix.shell().error([:bright, :red, @shell_prefix, error.message, :reset])
         {:error, [error]}
+    end
+  end
+
+  defp info(config, data) do
+    unless Keyword.get(config, :quiet, false) do
+      Mix.shell().info(data)
     end
   end
 end
