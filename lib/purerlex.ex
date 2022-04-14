@@ -43,10 +43,10 @@ defmodule Mix.Tasks.Compile.Purerl do
     end
   end
 
-  defp write_cache(config, project_root_probably, contents) do
+  defp write_cache(config, project_root_probably, contents, cmd_str) do
     path = project_root_probably <> "/" <> cache_path(config)
     File.mkdir_p!(Path.dirname(path))
-    File.write!(path, :erlang.term_to_binary(contents))
+    File.write!(path, :erlang.term_to_binary({cmd_str, contents}))
   end
 
   defp cached_build(config) do
@@ -54,7 +54,7 @@ defmodule Mix.Tasks.Compile.Purerl do
 
     info(config, [@shell_prefix, "assuming the project root is `#{project_root_probably}`"])
 
-    cached = read_cache(config, project_root_probably)
+    {old_cmd_str, cached} = read_cache(config, project_root_probably)
 
     purs_files =
       config
@@ -69,7 +69,7 @@ defmodule Mix.Tasks.Compile.Purerl do
     files = purs_files ++ erl_files
     stats = Enum.map(files, fn x -> {x, File.stat!(x).mtime} end)
 
-    if cached == stats do
+    if cached == stats && build_command(config) == old_cmd_str do
       info(config, [
         @shell_prefix,
         "no non-dep files changed; skipping running spago to save time."
@@ -87,7 +87,7 @@ defmodule Mix.Tasks.Compile.Purerl do
     Mix.shell().cmd(cmd_str, stderr_to_stdout: true)
     |> case do
       0 ->
-        write_cache(config, project_root_probably, stats)
+        write_cache(config, project_root_probably, stats, cmd_str)
         {:ok, []}
 
       exit_status ->
