@@ -15,7 +15,7 @@ First install it by adding `purerlex` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:purerlex, "~> 0.1.0"}
+    {:purerlex, "~> 0.4.0"}
   ]
 end
 ```

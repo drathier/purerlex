@@ -126,8 +126,15 @@ defmodule Mix.Tasks.Compile.Purerl do
   end
 
   defp spago_options(config) do
-    config
-    |> Keyword.get(:spago_options, [])
+    lazy =
+      config
+      |> Keyword.get(:spago_options_lazy, fn -> [] end)
+
+    strict =
+      config
+      |> Keyword.get(:spago_options, [])
+
+    (lazy.() ++ strict)
     |> List.wrap()
   end
 
