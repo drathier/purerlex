@@ -36,7 +36,11 @@ defmodule Mix.Tasks.Compile.Purerl do
   defp read_cache(config, project_root_probably) do
     case File.read(project_root_probably <> "/" <> cache_path(config)) do
       {:ok, res} ->
-        :erlang.binary_to_term(res)
+        term = :erlang.binary_to_term(res)
+        case term do
+          {_,_} -> term
+          _ -> {"", [""]}
+        end
 
       {:error, _err} ->
         ""
