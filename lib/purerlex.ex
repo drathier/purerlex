@@ -43,7 +43,7 @@ defmodule Mix.Tasks.Compile.Purerl do
         end
 
       {:error, _err} ->
-        ""
+        {"", [""]}
     end
   end
 
