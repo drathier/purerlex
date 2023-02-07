@@ -15,7 +15,7 @@ First install it by adding `purerlex` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:purerlex, "~> 0.4.0"}
+    {:purerlex, "~> 0.5.0"}
   ]
 end
 ```
@@ -33,6 +33,7 @@ Then add the `:purerl` compiler to (the beginning of) the list of compilers and 
       ]
     end
 
+Optionally, for dev builds, you can add the `:purserl` compiler instead and run a faster compiler fork from https://github.com/drathier/purserl/ .
 
 Docs are also available at [https://hexdocs.pm/purerlex](https://hexdocs.pm/purerlex).
 
