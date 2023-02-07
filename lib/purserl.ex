@@ -86,7 +86,7 @@ defmodule DevHelpers.Purserl do
   ###
 
   def trigger_recompile(pid) do
-    res = GenServer.call(pid, :recompile)
+    res = GenServer.call(pid, :recompile, :infinity)
     res
   end
 
