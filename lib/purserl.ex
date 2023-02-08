@@ -23,7 +23,8 @@ defmodule DevHelpers.Purserl do
   def init(_) do
     state = %{
       port: nil,
-      caller: nil
+      caller: nil,
+      changed_files: []
     }
 
     {:ok, state, {:continue, :start_compiler}}
@@ -43,22 +44,32 @@ defmodule DevHelpers.Purserl do
   def handle_info({port, {:data, {:eol, msg}}}, state) do
     case msg |> String.starts_with?("###") do
       true ->
-        case msg do
-          "### launching compiler" ->
+        cond do
+          msg == "### launching compiler" ->
             {:noreply, state}
 
-          "### read externs" ->
+          msg == "### read externs" ->
             {:noreply, state}
 
-          "### done compiler: 0" ->
+          msg == "### done compiler: 0" ->
+            state.changed_files
+            |> Enum.map(fn m ->
+              res = compile_erlang(m)
+            end)
+
             GenServer.reply(state.caller, :ok)
-            {:noreply, %{state | caller: nil}}
+            {:noreply, %{state | caller: nil, changed_files: []}}
 
-          other ->
-            IO.inspect({:meta, :unhandled, other})
+          msg |> String.starts_with?("### erl-same:") ->
+            {:noreply, state}
+
+          msg |> String.starts_with?("### erl-diff:") ->
+            ["", path_to_changed_file] = msg |> String.split("### erl-diff:", parts: 2)
+            {:noreply, %{state | changed_files: [path_to_changed_file | state.changed_files]}}
+
+          true ->
+            {:noreply, state}
         end
-
-        {:noreply, state}
 
       false ->
         IO.puts("> " <> msg)
@@ -96,6 +107,26 @@ defmodule DevHelpers.Purserl do
   end
 
   ###
+
+  # Compiles and loads an Erlang source file, returns {module, binary}
+  defp compile_erlang(source) do
+    source = Path.relative_to_cwd(source) |> String.to_charlist()
+
+    case :compile.file(source, [:binary, :report]) do
+      {:ok, module, binary} ->
+        # write newly compiled file to disk as beam file
+        base = source |> Path.basename() |> Path.rootname()
+        File.write!(Path.join(Mix.Project.compile_path(), base <> ".beam"), binary)
+
+        # reload in memory
+        :code.purge(module)
+        {:module, module} = :code.load_binary(module, source, binary)
+        {module, binary}
+
+      _ ->
+        raise CompileError
+    end
+  end
 
   def build() do
     cmd_str = build_command()
