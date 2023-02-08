@@ -2,6 +2,7 @@ defmodule DevHelpers.Purserl do
   use GenServer
 
   ###
+  @shell_prefix "Purserl: "
 
   def start_link() do
     case GenServer.start_link(__MODULE__, nil, name: :purserl_compiler) do
