@@ -27,17 +27,21 @@ defmodule DevHelpers.Purserl do
       changed_files: []
     }
 
-    {:ok, state, {:continue, :start_compiler}}
-  end
-
-  @impl true
-  def handle_continue(:start_compiler, state) do
     {:ok, cmd} = get_purs_call()
     # NOTE[fh]: has to be charlist strings ('qwe'), not binary strings ("qwe")
-    port = Port.open({:spawn, cmd}, [:binary, :exit_status, :stderr_to_stdout, {:env, [{'PURS_LOOP_EVERY_SECOND', '1'}]}, {:line, 999_999_999}])
+    port =
+      Port.open({:spawn, cmd}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        {:env, [{'PURS_LOOP_EVERY_SECOND', '1'}]},
+        {:line, 999_999_999}
+      ])
+
     state = %{state | port: port}
     IO.puts("Purserl compiler started")
-    {:noreply, state}
+
+    {:ok, state}
   end
 
   @impl true
