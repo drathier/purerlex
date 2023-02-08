@@ -2,7 +2,6 @@ defmodule DevHelpers.Purserl do
   use GenServer
 
   ###
-  @shell_prefix "Purserl: "
 
   def start_link() do
     case GenServer.start_link(__MODULE__, nil, name: :purserl_compiler) do
@@ -52,7 +51,7 @@ defmodule DevHelpers.Purserl do
           msg == "### read externs" ->
             {:noreply, state}
 
-          msg == "### done compiler: 0" ->
+          msg |> String.starts_with?("### done compiler:") ->
             state.changed_files
             |> Enum.map(fn m ->
               res = compile_erlang(m)
@@ -129,33 +128,6 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def build() do
-    cmd_str = build_command()
-
-    Mix.shell().cmd(cmd_str, stderr_to_stdout: true, env: [{"PURS_LOOP_EVERY_SECOND", "0"}])
-    |> case do
-      0 ->
-        {:ok, []}
-
-      exit_status ->
-        error = %Mix.Task.Compiler.Diagnostic{
-          compiler_name: "purerl-mix-compiler",
-          details: nil,
-          file: "spago",
-          message: "non-zero exit code #{exit_status} from `#{cmd_str}`",
-          position: nil,
-          severity: :error
-        }
-
-        Mix.shell().error([:bright, :red, @shell_prefix, error.message, :reset])
-        {:error, [error]}
-    end
-  end
-
-  defp build_command() do
-    "spago build --purs-args \"--codegen erl\" -v --no-psa"
-  end
-
   def spawn_port(cmd) do
     # cmd_str = "spago build --purs-args \"--codegen erl\" -v --no-psa"
     port = Port.open({:spawn, cmd}, [:binary, {:env, [{'PURS_LOOP_EVERY_SECOND', '1'}]}])
@@ -167,7 +139,7 @@ defmodule DevHelpers.Purserl do
 
     System.shell(cmd_str, stderr_to_stdout: true, env: [{"PURS_LOOP_EVERY_SECOND", "0"}])
     |> case do
-      {res, 0} ->
+      {res, _} ->
         {:ok, res}
         split_str = "Running command: `purs compile"
 
@@ -179,19 +151,6 @@ defmodule DevHelpers.Purserl do
         [_debug, args_with_end] = line |> String.split(split_str, parts: 2)
         [args, _end] = args_with_end |> String.split("`", parts: 2)
         {:ok, "purs compile " <> args}
-
-      {err, exit_status} ->
-        error = %Mix.Task.Compiler.Diagnostic{
-          compiler_name: "purerl-mix-compiler",
-          details: err,
-          file: "spago",
-          message: "non-zero exit code #{exit_status} from `#{cmd_str}`",
-          position: nil,
-          severity: :error
-        }
-
-        Mix.shell().error([:bright, :red, @shell_prefix, error.message, :reset])
-        {:error, [error]}
     end
   end
 end
