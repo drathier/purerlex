@@ -11,14 +11,6 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  """
-  alias DevHelpers.Purserl, as: P
-  {:ok, pid} = P.start_link()
-  P.trigger_recompile(pid)
-  P.trigger_recompile(pid)
-  P.trigger_exit(pid)
-  """
-
   @impl true
   def init(_) do
     state = %{
