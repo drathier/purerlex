@@ -45,7 +45,7 @@ defmodule DevHelpers.Purserl do
   end
 
   @impl true
-  def handle_info({port, {:data, {:eol, msg}}}, state) do
+  def handle_info({_port, {:data, {:eol, msg}}}, state) do
     case msg |> String.starts_with?("###") do
       true ->
         cond do
@@ -58,7 +58,7 @@ defmodule DevHelpers.Purserl do
           msg |> String.starts_with?("### done compiler:") ->
             state.changed_files
             |> Enum.map(fn m ->
-              res = compile_erlang(m)
+              _ = compile_erlang(m)
             end)
 
             GenServer.reply(state.caller, :ok)
@@ -81,20 +81,20 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def handle_info({port, {:exit_status, exit_status}}, state) do
+  def handle_info({_port, {:exit_status, exit_status}}, state) do
     msg = "Purs exited unexpectedly with code #{exit_status}"
     IO.puts(msg)
     {:stop, msg, state}
   end
 
   @impl true
-  def handle_call(:shutdown_compiler, from, state) do
+  def handle_call(:shutdown_compiler, _from, state) do
     Port.close(state.port)
     {:stop, "was told to stop", state}
   end
 
   def handle_call(:recompile, from, state) do
-    res = Port.command(state.port, 'sdf\n', [])
+    _ = Port.command(state.port, 'sdf\n', [])
     {:noreply, %{state | caller: from}}
   end
 
