@@ -31,11 +31,15 @@ defmodule DevHelpers.Purserl do
     {:ok, state, {:continue, :start_compiler}}
   end
 
+  def env_varaibles() do
+    [{'PURS_LOOP_EVERY_SECOND', '1'}, {'PURS_FORCE_COLOR', '1'}]
+  end
+
   @impl true
   def handle_continue(:start_compiler, state) do
     {:ok, cmd} = get_purs_call()
     # NOTE[fh]: has to be charlist strings ('qwe'), not binary strings ("qwe")
-    port = Port.open({:spawn, cmd}, [:binary, :exit_status, :stderr_to_stdout, {:env, [{'PURS_LOOP_EVERY_SECOND', '1'}]}, {:line, 999_999_999}])
+    port = Port.open({:spawn, cmd}, [:binary, :exit_status, :stderr_to_stdout, {:env, env_varaibles()}, {:line, 999_999_999}])
     state = %{state | port: port}
     IO.puts("Purserl compiler started")
     {:noreply, state}
@@ -158,7 +162,7 @@ defmodule DevHelpers.Purserl do
 
   def spawn_port(cmd) do
     # cmd_str = "spago build --purs-args \"--codegen erl\" -v --no-psa"
-    port = Port.open({:spawn, cmd}, [:binary, {:env, [{'PURS_LOOP_EVERY_SECOND', '1'}]}])
+    port = Port.open({:spawn, cmd}, [:binary, {:env, env_varaibles()}])
     port
   end
 
