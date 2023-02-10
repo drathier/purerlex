@@ -2,7 +2,6 @@ defmodule DevHelpers.Purserl do
   use GenServer
 
   ###
-  @shell_prefix "Purserl: "
 
   def start_link() do
     case GenServer.start_link(__MODULE__, nil, name: :purserl_compiler) do
@@ -12,14 +11,10 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  """
-  alias DevHelpers.Purserl, as: P
-  {:ok, pid} = P.start_link()
-  P.trigger_recompile(pid)
-  P.trigger_recompile(pid)
-  P.trigger_exit(pid)
-  """
-
+  def env_varaibles() do
+    [{'PURS_LOOP_EVERY_SECOND', '1'}, {'PURS_FORCE_COLOR', '1'}]
+  end
+  
   @impl true
   def init(_) do
     state = %{
@@ -28,25 +23,25 @@ defmodule DevHelpers.Purserl do
       changed_files: []
     }
 
-    {:ok, state, {:continue, :start_compiler}}
-  end
-
-  def env_varaibles() do
-    [{'PURS_LOOP_EVERY_SECOND', '1'}, {'PURS_FORCE_COLOR', '1'}]
-  end
-
-  @impl true
-  def handle_continue(:start_compiler, state) do
     {:ok, cmd} = get_purs_call()
     # NOTE[fh]: has to be charlist strings ('qwe'), not binary strings ("qwe")
-    port = Port.open({:spawn, cmd}, [:binary, :exit_status, :stderr_to_stdout, {:env, env_varaibles()}, {:line, 999_999_999}])
+    port =
+      Port.open({:spawn, cmd}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        {:env, env_varaibles()},
+        {:line, 999_999_999}
+      ])
+
     state = %{state | port: port}
     IO.puts("Purserl compiler started")
-    {:noreply, state}
+
+    {:ok, state}
   end
 
   @impl true
-  def handle_info({port, {:data, {:eol, msg}}}, state) do
+  def handle_info({_port, {:data, {:eol, msg}}}, state) do
     case msg |> String.starts_with?("###") do
       true ->
         cond do
@@ -56,10 +51,10 @@ defmodule DevHelpers.Purserl do
           msg == "### read externs" ->
             {:noreply, state}
 
-          msg == "### done compiler: 0" ->
+          msg |> String.starts_with?("### done compiler:") ->
             state.changed_files
             |> Enum.map(fn m ->
-              res = compile_erlang(m)
+              _ = compile_erlang(m)
             end)
 
             GenServer.reply(state.caller, :ok)
@@ -82,20 +77,20 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def handle_info({port, {:exit_status, exit_status}}, state) do
+  def handle_info({_port, {:exit_status, exit_status}}, state) do
     msg = "Purs exited unexpectedly with code #{exit_status}"
     IO.puts(msg)
     {:stop, msg, state}
   end
 
   @impl true
-  def handle_call(:shutdown_compiler, from, state) do
+  def handle_call(:shutdown_compiler, _from, state) do
     Port.close(state.port)
     {:stop, "was told to stop", state}
   end
 
   def handle_call(:recompile, from, state) do
-    res = Port.command(state.port, 'sdf\n', [])
+    _ = Port.command(state.port, 'sdf\n', [])
     {:noreply, %{state | caller: from}}
   end
 
@@ -133,33 +128,6 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def build() do
-    cmd_str = build_command()
-
-    Mix.shell().cmd(cmd_str, stderr_to_stdout: true, env: [{"PURS_LOOP_EVERY_SECOND", "0"}])
-    |> case do
-      0 ->
-        {:ok, []}
-
-      exit_status ->
-        error = %Mix.Task.Compiler.Diagnostic{
-          compiler_name: "purerl-mix-compiler",
-          details: nil,
-          file: "spago",
-          message: "non-zero exit code #{exit_status} from `#{cmd_str}`",
-          position: nil,
-          severity: :error
-        }
-
-        Mix.shell().error([:bright, :red, @shell_prefix, error.message, :reset])
-        {:error, [error]}
-    end
-  end
-
-  defp build_command() do
-    "spago build --purs-args \"--codegen erl\" -v --no-psa"
-  end
-
   def spawn_port(cmd) do
     # cmd_str = "spago build --purs-args \"--codegen erl\" -v --no-psa"
     port = Port.open({:spawn, cmd}, [:binary, {:env, env_varaibles()}])
@@ -171,7 +139,7 @@ defmodule DevHelpers.Purserl do
 
     System.shell(cmd_str, stderr_to_stdout: true, env: [{"PURS_LOOP_EVERY_SECOND", "0"}])
     |> case do
-      {res, 0} ->
+      {res, _} ->
         {:ok, res}
         split_str = "Running command: `purs compile"
 
@@ -183,19 +151,6 @@ defmodule DevHelpers.Purserl do
         [_debug, args_with_end] = line |> String.split(split_str, parts: 2)
         [args, _end] = args_with_end |> String.split("`", parts: 2)
         {:ok, "purs compile " <> args}
-
-      {err, exit_status} ->
-        error = %Mix.Task.Compiler.Diagnostic{
-          compiler_name: "purerl-mix-compiler",
-          details: err,
-          file: "spago",
-          message: "non-zero exit code #{exit_status} from `#{cmd_str}`",
-          position: nil,
-          severity: :error
-        }
-
-        Mix.shell().error([:bright, :red, @shell_prefix, error.message, :reset])
-        {:error, [error]}
     end
   end
 end
