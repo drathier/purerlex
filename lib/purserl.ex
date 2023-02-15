@@ -3,8 +3,8 @@ defmodule DevHelpers.Purserl do
 
   ###
 
-  def start_link() do
-    case GenServer.start_link(__MODULE__, nil, name: :purserl_compiler) do
+  def start_link(config) do
+    case GenServer.start_link(__MODULE__, config, name: :purserl_compiler) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       res -> res
@@ -16,7 +16,7 @@ defmodule DevHelpers.Purserl do
   end
 
   @impl true
-  def init(_) do
+  def init(config) do
     # 1. run spago to get at the `purs` cmd it builds
     # 2. terminate spago as soon as it prints its `purs` cmd
     # 3. run that `purs` cmd ourselves
@@ -27,6 +27,7 @@ defmodule DevHelpers.Purserl do
       port: nil,
       caller: nil,
       purs_cmd: nil,
+      purs_args: Keyword.get(config, :purs_args, "")
     }
 
     {:ok, state} = start_spago(state)
@@ -53,7 +54,7 @@ defmodule DevHelpers.Purserl do
 
   def run_purs(state) do
     port =
-      Port.open({:spawn, state.purs_cmd}, [
+      Port.open({:spawn, state.purs_cmd <> " " <> state.purs_args}, [
         :binary,
         :exit_status,
         :stderr_to_stdout,
@@ -104,7 +105,12 @@ defmodule DevHelpers.Purserl do
           msg |> String.starts_with?("### erl-diff:") ->
             ["", path_to_changed_file] = msg |> String.split("### erl-diff:", parts: 2)
             # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
-            compile_erlang(path_to_changed_file)
+            cond do
+              path_to_changed_file |> String.ends_with?(".erl") ->
+                compile_erlang(path_to_changed_file)
+              true ->
+                nil
+            end
             {:noreply, state}
 
           true ->
