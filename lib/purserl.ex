@@ -14,19 +14,46 @@ defmodule DevHelpers.Purserl do
   def env_varaibles() do
     [{'PURS_LOOP_EVERY_SECOND', '1'}, {'PURS_FORCE_COLOR', '1'}]
   end
-  
+
   @impl true
   def init(_) do
+    # 1. run spago to get at the `purs` cmd it builds
+    # 2. terminate spago as soon as it prints its `purs` cmd
+    # 3. run that `purs` cmd ourselves
+    # 4. init is done
+    # 5. repeat step 3 forever, on `recompile`
+
     state = %{
       port: nil,
       caller: nil,
-      changed_files: []
+      purs_cmd: nil,
     }
 
-    {:ok, cmd} = get_purs_call()
-    # NOTE[fh]: has to be charlist strings ('qwe'), not binary strings ("qwe")
+    {:ok, state} = start_spago(state)
+
+    {:ok, state}
+  end
+
+  def start_spago(state) do
+    # NOTE[fh]: cmd has to be charlist strings ('qwe'), not binary strings ("qwe")
+    cmd = 'spago build --purs-args \"--codegen erl\" -v --no-psa'
+
     port =
       Port.open({:spawn, cmd}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        {:env, [{'PURS_LOOP_EVERY_SECOND', '0'}]},
+        {:line, 999_999_999}
+      ])
+
+    state = %{state | port: port}
+    {:ok, state}
+  end
+
+  def run_purs(state) do
+    port =
+      Port.open({:spawn, state.purs_cmd}, [
         :binary,
         :exit_status,
         :stderr_to_stdout,
@@ -34,16 +61,28 @@ defmodule DevHelpers.Purserl do
         {:line, 999_999_999}
       ])
 
-    state = %{state | port: port}
-    IO.puts("Purserl compiler started")
+    # send one newline to trigger a first recompile, in case nothing needed to be rebuilt. Out handle_info is looking for a "done compiler" message, which is printed when compilation finishes
+    _ = Port.command(port, 'first\n', [])
 
-    {:ok, state}
+    {:ok, %{state | port: port}}
   end
 
   @impl true
   def handle_info({_port, {:data, {:eol, msg}}}, state) do
-    case msg |> String.starts_with?("###") do
-      true ->
+    cond do
+      # spago
+      msg |> String.contains?("Running command: `purs compile") ->
+        Port.close(state.port)
+
+        {:ok, cmd} = extract_purs_cmd(msg)
+        {:ok, state} = run_purs(%{state | port: nil, purs_cmd: cmd})
+        {:noreply, state}
+
+      state.purs_cmd == nil ->
+        {:noreply, state}
+
+      # purs
+      msg |> String.starts_with?("###") ->
         cond do
           msg == "### launching compiler" ->
             {:noreply, state}
@@ -51,28 +90,29 @@ defmodule DevHelpers.Purserl do
           msg == "### read externs" ->
             {:noreply, state}
 
-          msg |> String.starts_with?("### done compiler:") ->
-            state.changed_files
-            |> Enum.map(fn m ->
-              _ = compile_erlang(m)
-            end)
-
+          msg |> String.starts_with?("### done compiler: 0") ->
             GenServer.reply(state.caller, :ok)
-            {:noreply, %{state | caller: nil, changed_files: []}}
+            {:noreply, %{state | caller: nil}}
+
+          msg |> String.starts_with?("### done compiler: 1") ->
+            GenServer.reply(state.caller, :err)
+            {:noreply, %{state | caller: nil}}
 
           msg |> String.starts_with?("### erl-same:") ->
             {:noreply, state}
 
           msg |> String.starts_with?("### erl-diff:") ->
             ["", path_to_changed_file] = msg |> String.split("### erl-diff:", parts: 2)
-            {:noreply, %{state | changed_files: [path_to_changed_file | state.changed_files]}}
+            # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
+            compile_erlang(path_to_changed_file)
+            {:noreply, state}
 
           true ->
             {:noreply, state}
         end
 
-      false ->
-        IO.puts("> " <> msg)
+      true ->
+        IO.puts(msg)
         {:noreply, state}
     end
   end
@@ -98,7 +138,26 @@ defmodule DevHelpers.Purserl do
 
   def trigger_recompile(pid) do
     res = GenServer.call(pid, :recompile, :infinity)
-    res
+
+    case res do
+      :ok ->
+        {:ok, []}
+
+      :err ->
+        {
+          :error,
+          [
+            %Mix.Task.Compiler.Diagnostic{
+              compiler_name: "purserl-mix-compiler",
+              details: nil,
+              file: "purserl",
+              message: "Purs compilation failed.",
+              position: nil,
+              severity: :error
+            }
+          ]
+        }
+    end
   end
 
   def trigger_exit(pid) do
@@ -134,23 +193,11 @@ defmodule DevHelpers.Purserl do
     port
   end
 
-  def get_purs_call() do
-    cmd_str = "spago build --purs-args \"--codegen erl\" -v --no-psa"
+  def extract_purs_cmd(line) do
+    split_str = "Running command: `purs compile"
 
-    System.shell(cmd_str, stderr_to_stdout: true, env: [{"PURS_LOOP_EVERY_SECOND", "0"}])
-    |> case do
-      {res, _} ->
-        {:ok, res}
-        split_str = "Running command: `purs compile"
-
-        line =
-          res
-          |> String.split("\n")
-          |> Enum.find(fn x -> x |> String.contains?(split_str) end)
-
-        [_debug, args_with_end] = line |> String.split(split_str, parts: 2)
-        [args, _end] = args_with_end |> String.split("`", parts: 2)
-        {:ok, "purs compile " <> args}
-    end
+    [_debug, args_with_end] = line |> String.split(split_str, parts: 2)
+    [args, _end] = args_with_end |> String.split("`", parts: 2)
+    {:ok, "purs compile " <> args}
   end
 end
