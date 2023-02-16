@@ -104,13 +104,16 @@ defmodule DevHelpers.Purserl do
 
           msg |> String.starts_with?("### erl-diff:") ->
             ["", path_to_changed_file] = msg |> String.split("### erl-diff:", parts: 2)
+
             # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
             cond do
               path_to_changed_file |> String.ends_with?(".erl") ->
                 compile_erlang(path_to_changed_file)
+
               true ->
                 nil
             end
+
             {:noreply, state}
 
           true ->
@@ -174,7 +177,7 @@ defmodule DevHelpers.Purserl do
   ###
 
   # Compiles and loads an Erlang source file, returns {module, binary}
-  defp compile_erlang(source) do
+  defp compile_erlang(source, retries \\ 0) do
     source = Path.relative_to_cwd(source) |> String.to_charlist()
 
     case :compile.file(source, [:binary, :report]) do
@@ -189,7 +192,19 @@ defmodule DevHelpers.Purserl do
         {module, binary}
 
       _ ->
-        raise CompileError
+        cond do
+          retries <= 10 ->
+            sleep_time = retries * 100
+            Process.sleep(sleep_time)
+            #IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
+            compile_erlang(source, retries + 1)
+
+          true ->
+            IO.puts("#############################################################################")
+            IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
+            IO.puts("#############################################################################")
+            raise CompileError
+        end
     end
   end
 
