@@ -23,11 +23,13 @@ defmodule DevHelpers.Purserl do
     # 4. init is done
     # 5. repeat step 3 forever, on `recompile`
 
+    IO.inspect({:init_purserl, config})
+
     state = %{
       port: nil,
       caller: nil,
       purs_cmd: nil,
-      purs_args: Keyword.get(config, :purs_args, "")
+      purs_args: config |> Keyword.get(:purs_args, "")
     }
 
     {:ok, state} = start_spago(state)
@@ -53,6 +55,8 @@ defmodule DevHelpers.Purserl do
   end
 
   def run_purs(state) do
+    IO.inspect({:run_purs, state})
+
     port =
       Port.open({:spawn, state.purs_cmd <> " " <> state.purs_args}, [
         :binary,
@@ -121,8 +125,21 @@ defmodule DevHelpers.Purserl do
         end
 
       true ->
-        IO.puts(msg)
-        {:noreply, state}
+        # is it json errors?
+        case Jason.decode(msg) do
+          {:ok, v} ->
+            # yes, now do stuff with it
+            IO.puts("==== json parsed ok ====")
+            IO.puts(inspect({:got_json, v}, width: 80))
+            process_warnings(v["warnings"])
+
+            {:noreply, state}
+
+          {:error, _} ->
+            # nope, print it
+            IO.puts(msg)
+            {:noreply, state}
+        end
     end
   end
 
@@ -196,7 +213,7 @@ defmodule DevHelpers.Purserl do
           retries <= 10 ->
             sleep_time = retries * 100
             Process.sleep(sleep_time)
-            #IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
+            # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
             compile_erlang(source, retries + 1)
 
           true ->
@@ -220,5 +237,185 @@ defmodule DevHelpers.Purserl do
     [_debug, args_with_end] = line |> String.split(split_str, parts: 2)
     [args, _end] = args_with_end |> String.split("`", parts: 2)
     {:ok, "purs compile " <> args}
+  end
+
+  def process_warnings(warnings) do
+    # warnings = [
+    #  %{
+    #    "allSpans" => [
+    #      %{"end" => [22, 12], "name" => "lib/Shell.purs", "start" => [22, 1]}
+    #    ],
+    #    "errorCode" => "MissingTypeDeclaration",
+    #    "errorLink" => "https://github.com/purescript/documentation/blob/master/errors/MissingTypeDeclaration.md",
+    #    "filename" => "lib/Shell.purs",
+    #    "message" =>
+    #      "  No type declaration was provided for the top-level declaration of asdf.\n  It is good practice to provide type declarations as a form of documentation.\n  The inferred type of asdf was:\n\n    Int\n\n\nin value declaration asdf\n",
+    #    "moduleName" => "Shell",
+    #    "position" => %{
+    #      "endColumn" => 12,
+    #      "endLine" => 22,
+    #      "startColumn" => 1,
+    #      "startLine" => 22
+    #    },
+    #    "suggestion" => %{
+    #      "replaceRange" => %{
+    #        "endColumn" => 1,
+    #        "endLine" => 22,
+    #        "startColumn" => 1,
+    #        "startLine" => 22
+    #      },
+    #      "replacement" => "asdf :: Int\n\n"
+    #    }
+    #  }
+    # ]
+
+    not_in_spago =
+      warnings
+      |> Enum.filter(fn x ->
+        case x do
+          %{"filename" => ".spago/" <> _} -> false
+          _ -> true
+        end
+      end)
+
+    has_suggestion =
+      not_in_spago
+      |> Enum.filter(fn x ->
+        case x do
+          %{"suggestion" => _} -> true
+          _ -> false
+        end
+      end)
+
+    should_be_applied =
+      has_suggestion
+      |> Enum.filter(fn x ->
+        case x do
+          %{"errorCode" => error_code, "suggestion" => %{"replacement" => replacement}} ->
+            case error_code do
+              "UnusedImport" ->
+                true
+
+              "DuplicateImport" ->
+                true
+
+              "UnusedExplicitImport" ->
+                true
+
+              "UnusedDctorImport" ->
+                true
+
+              "UnusedDctorExplicitImport" ->
+                true
+
+              "ImplicitImport" ->
+                cond do
+                  replacement |> String.starts_with?("import Joe") -> false
+                  replacement |> String.starts_with?("import Prelude") -> false
+                  true -> true
+                end
+
+              "ImplicitQualifiedImport" ->
+                true
+
+              "ImplicitQualifiedImportReExport" ->
+                false
+
+              "HidingImport" ->
+                true
+
+              "MissingTypeDeclaration" ->
+                true
+
+              "MissingKindDeclaration" ->
+                true
+
+              "WildcardInferredType" ->
+                false
+
+              "WarningParsingCSTModule" ->
+                true
+
+              _ ->
+                IO.inspect({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
+                false
+            end
+
+          _ ->
+            false
+        end
+      end)
+
+    reverse_sorted_applications =
+      should_be_applied
+      |> Enum.sort_by(fn %{"suggestion" => %{"replaceRange" => %{"startColumn" => start_column, "startLine" => start_line, "endColumn" => end_column, "endLine" => end_line}}} ->
+        {start_line, start_column, end_line, end_column}
+      end)
+      |> Enum.reverse
+
+    reverse_sorted_applications
+    |> Enum.map(fn x -> apply_suggestion(x) end)
+
+    # [drathier]: do we need to sort the errors?
+
+    # has_suggestion
+  end
+
+  def apply_suggestion(%{
+        "filename" => filename,
+        "suggestion" => %{
+          "replaceRange" => %{
+            "startColumn" => start_column,
+            "startLine" => start_line,
+            "endColumn" => end_column,
+            "endLine" => end_line
+          },
+          "replacement" => replacement
+        }
+      }) do
+    IO.inspect({"applying suggestion", filename, replacement})
+    r_prefix_lines = "(?<prefix_lines>(([^\n]*\n){#{start_line - 1}}))"
+    r_prefix_columns = "(?<prefix_columns>(.{#{start_column - 1}}))"
+    r_infix_columns = "(?<infix_columns>(.{#{end_column - start_column}}))"
+    r_infix_lines = "(?<infix_lines>(([^\n]*\n){#{end_line - start_line}}))"
+    r_suffix_columns = "(?<suffix_columns>[^\n]*\n)"
+    r_suffix_lines = "(?<suffix_lines>[\\S\\s]*)"
+
+    r =
+      r_prefix_lines <>
+        r_prefix_columns <>
+        r_infix_columns <>
+        r_infix_lines <>
+        r_suffix_columns <>
+        r_suffix_lines
+
+    old_content = File.read!(filename)
+
+    reg = Regex.named_captures(Regex.compile!(r), old_content)
+
+    # TODO[drathier]: why is there two trailing newlines in the suggested replacement?
+    cleaned_replacement =
+      replacement
+      |> String.replace_suffix("\n\n", "\n")
+
+    new_content =
+      reg["prefix_lines"] <>
+        reg["prefix_columns"] <>
+        cleaned_replacement <>
+        reg["suffix_columns"] <>
+        reg["suffix_lines"]
+
+    # IO.puts("=== v pre")
+    # IO.puts(old_content)
+    # IO.puts("=== v post")
+    # IO.puts(new_content)
+    # IO.puts("=== end")
+
+    if new_content != old_content do
+      :ok = File.write!(filename, new_content)
+      :applied_suggestion
+    else
+      :no_change
+    end
   end
 end
