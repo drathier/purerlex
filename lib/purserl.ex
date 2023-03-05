@@ -818,7 +818,7 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "MissingKindDeclaration", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "WarningParsingCSTModule", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "WarningParsingModule", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
       %{"errorCode" => "ImplicitImport", "suggestion" => %{"replacement" => replacement}} ->
@@ -965,7 +965,7 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "DuplicateValueDeclaration"} ->
         :error
 
-      %{"errorCode" => "ErrorParsingCSTModule"} ->
+      %{"errorCode" => "ErrorParsingModule"} ->
         :error
 
       %{"errorCode" => "ErrorParsingFFIModule"} ->
@@ -1238,13 +1238,7 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "VisibleQuantificationCheckFailureInType"} ->
         :error
 
-      %{"errorCode" => "WarningParsingCSTModule"} ->
-        :error
-
       %{"errorCode" => "WildcardInferredType"} ->
-        :error
-
-      %{"errorCode" => "ErrorParsingModule"} ->
         :error
 
       ###
