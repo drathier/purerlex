@@ -1,5 +1,6 @@
 defmodule DevHelpers.Purserl do
   use GenServer
+  alias IO.ANSI, as: Color
 
   ###
 
@@ -55,8 +56,6 @@ defmodule DevHelpers.Purserl do
   end
 
   def run_purs(state) do
-    IO.inspect({:run_purs, state})
-
     port =
       Port.open({:spawn, state.purs_cmd <> " " <> state.purs_args}, [
         :binary,
@@ -129,9 +128,7 @@ defmodule DevHelpers.Purserl do
         case Jason.decode(msg) do
           {:ok, v} ->
             # yes, now do stuff with it
-            IO.puts("==== json parsed ok ====")
-            IO.puts(inspect({:got_json, v}, width: 80))
-            process_warnings(v["warnings"])
+            process_warnings(v["warnings"], v["errors"])
 
             {:noreply, state}
 
@@ -239,7 +236,7 @@ defmodule DevHelpers.Purserl do
     {:ok, "purs compile " <> args}
   end
 
-  def process_warnings(warnings) do
+  def process_warnings(warnings, errors) do
     # warnings = [
     #  %{
     #    "allSpans" => [
@@ -269,96 +266,839 @@ defmodule DevHelpers.Purserl do
     #  }
     # ]
 
+    things =
+      (errors |> Enum.map(fn x -> x |> Map.put(:kind, :error) end)) ++
+        (warnings |> Enum.map(fn x -> x |> Map.put(:kind, :warning) end))
+
     not_in_spago =
-      warnings
+      things
       |> Enum.filter(fn x ->
         case x do
           %{"filename" => ".spago/" <> _} -> false
           _ -> true
         end
       end)
-
-    has_suggestion =
-      not_in_spago
-      |> Enum.filter(fn x ->
-        case x do
-          %{"suggestion" => _} -> true
-          _ -> false
-        end
+      |> Enum.sort_by(fn x ->
+        %{"position" => %{"startColumn" => start_column, "startLine" => start_line, "endColumn" => end_column, "endLine" => end_line}} = x
+        {error_kind_ord(x), start_line, start_column, end_line, end_column}
       end)
 
-    should_be_applied =
-      has_suggestion
-      |> Enum.filter(fn x ->
-        case x do
-          %{"errorCode" => error_code, "suggestion" => %{"replacement" => replacement}} ->
-            case error_code do
-              "UnusedImport" ->
-                true
-
-              "DuplicateImport" ->
-                true
-
-              "UnusedExplicitImport" ->
-                true
-
-              "UnusedDctorImport" ->
-                true
-
-              "UnusedDctorExplicitImport" ->
-                true
-
-              "ImplicitImport" ->
-                cond do
-                  replacement |> String.starts_with?("import Joe") -> false
-                  replacement |> String.starts_with?("import Prelude") -> false
-                  true -> true
-                end
-
-              "ImplicitQualifiedImport" ->
-                true
-
-              "ImplicitQualifiedImportReExport" ->
-                false
-
-              "HidingImport" ->
-                true
-
-              "MissingTypeDeclaration" ->
-                true
-
-              "MissingKindDeclaration" ->
-                true
-
-              "WildcardInferredType" ->
-                false
-
-              "WarningParsingCSTModule" ->
-                true
-
-              _ ->
-                IO.inspect({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
-                false
-            end
+    file_contents_map =
+      not_in_spago
+      |> Enum.map(fn x -> x["filename"] end)
+      |> Enum.sort()
+      |> Enum.dedup()
+      |> List.foldl(%{}, fn filename, acc ->
+        case Map.get(acc, filename) do
+          nil ->
+            Map.put(acc, filename, File.read!(filename))
 
           _ ->
-            false
+            acc
         end
       end)
 
+    with_file_contents =
+      not_in_spago
+      |> Enum.map(fn x -> Map.put(x, :file_contents_before, file_contents_map[x["filename"]]) end)
+
+    file_contents_map = nil
+
+    should_be_fixed_automatically =
+      with_file_contents
+      |> Enum.filter(&can_be_fixed_automatically?/1)
+
     reverse_sorted_applications =
-      should_be_applied
+      should_be_fixed_automatically
       |> Enum.sort_by(fn %{"suggestion" => %{"replaceRange" => %{"startColumn" => start_column, "startLine" => start_line, "endColumn" => end_column, "endLine" => end_line}}} ->
         {start_line, start_column, end_line, end_column}
       end)
-      |> Enum.reverse
+      |> Enum.reverse()
 
     reverse_sorted_applications
     |> Enum.map(fn x -> apply_suggestion(x) end)
 
-    # [drathier]: do we need to sort the errors?
+    to_print =
+      with_file_contents
+      |> Enum.flat_map(fn x ->
+        case error_kind(x) do
+          :ignore ->
+            []
 
-    # has_suggestion
+          :warn_fixable ->
+            [format_warning_or_error(:warn_fixable, x)]
+
+          :warn_no_autofix ->
+            [format_warning_or_error(:warn_no_autofix, x)]
+
+          :error ->
+            [format_warning_or_error(:error, x)]
+        end
+      end)
+
+    to_print
+    |> Enum.map(&IO.puts/1)
+  end
+
+  def format_warning_or_error(
+        kind,
+        %{
+          # "allSpans" => [
+          #  %{"end" => '$\f', "name" => "lib/Shell.purs", "start" => [36, 1]}
+          # ],
+          :file_contents_before => old_content,
+          "allSpans" => all_spans,
+          # "CycleInDeclaration"
+          "errorCode" => error_code,
+          "errorLink" => _,
+          # "lib/Shell.purs"
+          "filename" => filename,
+          :kind => _,
+          # "  The value of qwer is undefined here, so this reference is not allowed.\n"
+          "message" => message,
+          # nil
+          "moduleName" => module_name,
+          "position" => %{
+            "endColumn" => _,
+            "endLine" => _,
+            "startColumn" => _,
+            "startLine" => start_line
+          },
+          "suggestion" => _
+        } = inp
+      ) do
+    modu = module_name || filename
+
+    modu_with_line = format_modu_with_line(modu, start_line)
+
+    lines_of_context = 5
+
+    snippets =
+      all_spans
+      |> Enum.map(fn %{"name" => "lib/Shell.purs", "start" => [start_line, start_column], "end" => [end_line, end_column]} = inp ->
+        snippet =
+          parse_out_span(%{
+            :file_contents_before => old_content,
+            :start_line => start_line,
+            :start_column => start_column,
+            :end_line => end_line,
+            :end_column => end_column
+          })
+
+        snippet_context_pre =
+          ((snippet["prefix_lines"] |> String.split("\n") |> Enum.reverse() |> Enum.take(lines_of_context) |> Enum.reverse() |> Enum.join("\n")) <>
+             snippet["prefix_columns"])
+          |> String.trim_leading()
+
+        snippet_actual =
+          snippet["infix_columns"] <>
+            snippet["infix_lines"]
+
+        snippet_context_post =
+          (snippet["suffix_columns"] <>
+             (snippet["suffix_lines"] |> String.split("\n") |> Enum.take(lines_of_context) |> Enum.join("\n")))
+          |> String.trim_trailing()
+
+        code_snippet_with_context =
+          (snippet_context_pre |> prefix_all_lines(" ")) <>
+            (Color.yellow() <> (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
+            (snippet_context_post |> prefix_all_lines(" "))
+
+        ("  " <> format_modu_with_line(modu, start_line) <> "\n") <>
+          (code_snippet_with_context |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
+      end)
+
+    tag =
+      case kind do
+        :warn_fixable ->
+          Color.green() <> "Fixed" <> Color.reset()
+
+        :warn_no_autofix ->
+          Color.magenta() <> "Warning" <> Color.reset()
+
+        :error ->
+          Color.red() <> "Error" <> Color.reset()
+
+        _ ->
+          IO.inspect({"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+      end
+
+    (Color.cyan() <> "[" <> error_code <> "]" <> Color.reset() <> " " <> tag <> " " <> Color.yellow() <> modu_with_line <> Color.reset() <> "\n") <>
+      "\n" <>
+      ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <> "\n") <>
+      Enum.join(snippets, "\n\n") <>
+      "\n\n"
+  end
+
+  def format_modu_with_line(modu, line) do
+    Color.yellow() <>
+      if line do
+        modu <> ":" <> "#{line}"
+      else
+        modu
+      end <>
+      Color.reset()
+  end
+
+  def prefix_lines_skipping_first(str, prefix) do
+    str
+    |> String.split("\n")
+    |> Enum.map(fn x -> prefix <> x end)
+    |> Enum.join("\n")
+    |> String.replace_prefix(prefix, "")
+  end
+
+  def prefix_all_lines(str, prefix) do
+    str
+    |> String.split("\n")
+    |> Enum.map(fn x -> prefix <> x end)
+    |> Enum.join("\n")
+  end
+
+  def add_prefix_if_missing(str, prefix) do
+    str
+    |> String.split("\n")
+    |> Enum.map(fn x ->
+      cond do
+        x |> String.starts_with?(prefix) ->
+          x
+
+        true ->
+          prefix <> x
+      end
+    end)
+    |> Enum.join("\n")
+  end
+
+  def syntax_highlight_indentex_lines(str, prefix) do
+    str
+    |> String.split("\n")
+    |> Enum.map(fn x ->
+      cond do
+        x |> String.starts_with?(prefix) ->
+          prefixless = x |> String.trim_leading(prefix)
+          prefix_row = x |> String.slice(0..(-String.length(prefixless) - 1))
+          prefix_row <> hacky_syntax_highlight(x)
+
+        true ->
+          x
+      end
+    end)
+    |> Enum.join("\n")
+  end
+
+  def hacky_syntax_highlight(str) do
+    purescript_keywords = [
+      "∀",
+      "forall",
+      "ado",
+      "as",
+      "case",
+      "class",
+      "data",
+      "derive",
+      "do",
+      "else",
+      "false",
+      "foreign",
+      "hiding",
+      "import",
+      "if",
+      "in",
+      "infix",
+      "infixl",
+      "infixr",
+      "instance",
+      "let",
+      "module",
+      "newtype",
+      "nominal",
+      "phantom",
+      "of",
+      "representational",
+      "role",
+      "then",
+      "true",
+      # "type", # false positives
+      "where"
+    ]
+
+    purescript_infix_operator_characters =
+      "!#€%&/()=?©@£$∞§|[]≈±¡”¥¢‰{}≠¿'*¨^<>-,:;\\"
+      |> String.split("")
+      |> Enum.filter(fn x -> x != "" end)
+
+    tokenize(purescript_infix_operator_characters, str)
+    |> Enum.filter(fn x -> x != "" end)
+    |> Enum.map(fn x ->
+      cond do
+        Enum.member?(purescript_keywords, x) ->
+          Color.yellow() <> x <> Color.reset()
+
+        x |> String.split("") |> Enum.filter(fn c -> c != "" end) |> Enum.all?(fn c -> Enum.member?(purescript_infix_operator_characters, c) end) ->
+          Color.magenta() <> x <> Color.reset()
+
+        String.first(String.trim(x)) == "\"" ->
+          Color.green() <> x <> Color.reset()
+
+        String.first(x) == String.upcase(String.first(x)) ->
+          Color.cyan() <> x <> Color.reset()
+
+        true ->
+          x
+      end
+    end)
+    |> Enum.join("")
+  end
+
+  def tokenize(purescript_infix_operator_characters, str, kind \\ nil, curr \\ [], acc \\ []) do
+    {next_kind, ch, rest} =
+      case str do
+        # enter quote
+        <<"\"", rest::binary>> when kind != :quote ->
+          {:quote, "\"", rest}
+
+        <<"\"", rest::binary>> when kind != :quote ->
+          {:quote, "\"", rest}
+
+        # quoted strings and escape sequences
+        <<"\\", c2::binary-size(1), rest::binary>> when kind == :quote ->
+          {:quote, "\\" <> c2, rest}
+
+        # end quote
+        <<"\"", rest::binary>> when kind == :quote ->
+          {:end_quote, "\"", rest}
+
+        # non-quote
+        <<c::binary-size(1)>> <> rest ->
+          cond do
+            kind == :quote ->
+              {:quote, c, rest}
+
+            # other
+            c |> String.trim() != c ->
+              {:space, c, rest}
+
+            Enum.member?(purescript_infix_operator_characters, c) ->
+              {:op, c, rest}
+
+            true ->
+              {:word, c, rest}
+          end
+
+        "" ->
+          {:done, "", ""}
+      end
+
+    cond do
+      curr == [] && next_kind == :done ->
+        # all done
+        Enum.reverse(acc) |> Enum.filter(fn c -> c != "" end)
+
+      next_kind == :quote || next_kind == :end_quote ->
+        # append to curr and move on
+        tokenize(purescript_infix_operator_characters, rest, next_kind, [ch | curr], acc)
+
+      next_kind == :done || next_kind != kind ->
+        # move curr into acc
+        tokenize(purescript_infix_operator_characters, str, next_kind, [], [Enum.reverse(curr) |> Enum.join("") | acc])
+
+      next_kind == kind ->
+        # append to curr
+        tokenize(purescript_infix_operator_characters, rest, next_kind, [ch | curr], acc)
+    end
+  end
+
+  def parse_out_span(
+        %{
+          :file_contents_before => old_content,
+          :start_line => start_line,
+          :start_column => start_column,
+          :end_line => end_line,
+          :end_column => end_column
+        } = inp
+      ) do
+    r_prefix_lines = "(?<prefix_lines>(([^\n]*\n){#{start_line - 1}}))"
+    r_prefix_columns = "(?<prefix_columns>(.{#{start_column - 1}}))"
+    r_infix_columns = "(?<infix_columns>(.{#{end_column - start_column}}))"
+    r_infix_lines = "(?<infix_lines>(([^\n]*\n){#{end_line - start_line}}))"
+    r_suffix_columns = "(?<suffix_columns>[^\n]*)"
+    r_suffix_lines = "(?<suffix_lines>[\\S\\s]*)"
+
+    r =
+      r_prefix_lines <>
+        r_prefix_columns <>
+        r_infix_columns <>
+        r_infix_lines <>
+        r_suffix_columns <>
+        r_suffix_lines
+
+    reg = Regex.named_captures(Regex.compile!(r), old_content)
+    reg
+  end
+
+  def can_be_fixed_automatically?(x) do
+    error_kind(x) == :warn_fixable
+  end
+
+  def error_kind_ord(x) do
+    case error_kind(x) do
+      :ignore ->
+        1
+
+      :warn_fixable ->
+        2
+
+      :warn_no_autofix ->
+        3
+
+      :error ->
+        4
+    end
+  end
+
+  def error_kind(x) do
+    # :ignore
+    # :warn_fixable
+    # :warn_no_autofix
+    # :error
+    case x do
+      # warn fixable
+      %{"errorCode" => "UnusedImport", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "DuplicateImport", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "UnusedExplicitImport", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "UnusedDctorImport", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "UnusedDctorExplicitImport", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "ImplicitQualifiedImport", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "HidingImport", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "MissingTypeDeclaration", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "MissingKindDeclaration", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "WarningParsingCSTModule", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "ImplicitImport", "suggestion" => %{"replacement" => replacement}} ->
+        cond do
+          replacement |> String.starts_with?("import Joe") -> :ignore
+          replacement |> String.starts_with?("import Prelude") -> :ignore
+          true -> :warn_fixable
+        end
+
+      # warn without autofix
+      %{"errorCode" => "ScopeShadowing"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "ShadowedTypeVar"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "ImplicitQualifiedImportReExport"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "HiddenConstructors"} ->
+        :warn_no_autofix
+
+      # ignored
+      %{"errorCode" => "WildcardInferredType"} ->
+        :ignored
+
+      # errors
+      %{"errorCode" => "AdditionalProperty"} ->
+        :error
+
+      %{"errorCode" => "AmbiguousTypeVariables"} ->
+        :error
+
+      %{"errorCode" => "ArgListLengthsDiffer"} ->
+        :error
+
+      %{"errorCode" => "CannotDefinePrimModules"} ->
+        :error
+
+      %{"errorCode" => "CannotDerive"} ->
+        :error
+
+      %{"errorCode" => "CannotDeriveInvalidConstructorArg"} ->
+        :error
+
+      %{"errorCode" => "CannotDeriveNewtypeForData"} ->
+        :error
+
+      %{"errorCode" => "CannotFindDerivingType"} ->
+        :error
+
+      %{"errorCode" => "CannotGeneralizeRecursiveFunction"} ->
+        :error
+
+      %{"errorCode" => "CannotUseBindWithDo"} ->
+        :error
+
+      %{"errorCode" => "CaseBinderLengthDiffers"} ->
+        :error
+
+      %{"errorCode" => "ClassInstanceArityMismatch"} ->
+        :error
+
+      %{"errorCode" => "ConstrainedTypeUnified"} ->
+        :error
+
+      %{"errorCode" => "CycleInDeclaration"} ->
+        :error
+
+      %{"errorCode" => "CycleInKindDeclaration"} ->
+        :error
+
+      %{"errorCode" => "CycleInModules"} ->
+        :error
+
+      %{"errorCode" => "CycleInTypeClassDeclaration"} ->
+        :error
+
+      %{"errorCode" => "CycleInTypeSynonym"} ->
+        :error
+
+      %{"errorCode" => "DeclConflict"} ->
+        :error
+
+      %{"errorCode" => "DeprecatedFFICommonJSModule"} ->
+        :error
+
+      %{"errorCode" => "DeprecatedFFIPrime"} ->
+        :error
+
+      %{"errorCode" => "DuplicateExportRef"} ->
+        :error
+
+      %{"errorCode" => "DuplicateImport"} ->
+        :error
+
+      %{"errorCode" => "DuplicateImportRef"} ->
+        :error
+
+      %{"errorCode" => "DuplicateInstance"} ->
+        :error
+
+      %{"errorCode" => "DuplicateLabel"} ->
+        :error
+
+      %{"errorCode" => "DuplicateModule"} ->
+        :error
+
+      %{"errorCode" => "DuplicateRoleDeclaration"} ->
+        :error
+
+      %{"errorCode" => "DuplicateSelectiveImport"} ->
+        :error
+
+      %{"errorCode" => "DuplicateTypeArgument"} ->
+        :error
+
+      %{"errorCode" => "DuplicateTypeClass"} ->
+        :error
+
+      %{"errorCode" => "DuplicateValueDeclaration"} ->
+        :error
+
+      %{"errorCode" => "ErrorParsingCSTModule"} ->
+        :error
+
+      %{"errorCode" => "ErrorParsingFFIModule"} ->
+        :error
+
+      %{"errorCode" => "EscapedSkolem"} ->
+        :error
+
+      %{"errorCode" => "ExpectedType"} ->
+        :error
+
+      %{"errorCode" => "ExpectedTypeConstructor"} ->
+        :error
+
+      %{"errorCode" => "ExpectedWildcard"} ->
+        :error
+
+      %{"errorCode" => "ExportConflict"} ->
+        :error
+
+      %{"errorCode" => "ExprDoesNotHaveType"} ->
+        :error
+
+      %{"errorCode" => "ExtraneousClassMember"} ->
+        :error
+
+      %{"errorCode" => "FileIOError"} ->
+        :error
+
+      %{"errorCode" => "HidingImport"} ->
+        :error
+
+      %{"errorCode" => "HoleInferredType"} ->
+        :error
+
+      %{"errorCode" => "ImplicitQualifiedImportReExport"} ->
+        :error
+
+      %{"errorCode" => "ImportHidingModule"} ->
+        :error
+
+      %{"errorCode" => "IncompleteExhaustivityCheck"} ->
+        :error
+
+      %{"errorCode" => "IncorrectAnonymousArgument"} ->
+        :error
+
+      %{"errorCode" => "IncorrectConstructorArity"} ->
+        :error
+
+      %{"errorCode" => "InfiniteKind"} ->
+        :error
+
+      %{"errorCode" => "InfiniteType"} ->
+        :error
+
+      %{"errorCode" => "IntOutOfRange"} ->
+        :error
+
+      %{"errorCode" => "InternalCompilerError"} ->
+        :error
+
+      %{"errorCode" => "InvalidCoercibleInstanceDeclaration"} ->
+        :error
+
+      %{"errorCode" => "InvalidDerivedInstance"} ->
+        :error
+
+      %{"errorCode" => "InvalidDoBind"} ->
+        :error
+
+      %{"errorCode" => "InvalidDoLet"} ->
+        :error
+
+      %{"errorCode" => "InvalidFFIIdentifier"} ->
+        :error
+
+      %{"errorCode" => "InvalidInstanceHead"} ->
+        :error
+
+      %{"errorCode" => "InvalidNewtype"} ->
+        :error
+
+      %{"errorCode" => "InvalidNewtypeInstance"} ->
+        :error
+
+      %{"errorCode" => "InvalidOperatorInBinder"} ->
+        :error
+
+      %{"errorCode" => "KindsDoNotUnify"} ->
+        :error
+
+      %{"errorCode" => "MissingClassMember"} ->
+        :error
+
+      %{"errorCode" => "MissingFFIImplementations"} ->
+        :error
+
+      %{"errorCode" => "MissingFFIModule"} ->
+        :error
+
+      %{"errorCode" => "MissingKindDeclaration"} ->
+        :error
+
+      %{"errorCode" => "MissingNewtypeSuperclassInstance"} ->
+        :error
+
+      %{"errorCode" => "MissingTypeDeclaration"} ->
+        :error
+
+      %{"errorCode" => "MixedAssociativityError"} ->
+        :error
+
+      %{"errorCode" => "ModuleNotFound"} ->
+        :error
+
+      %{"errorCode" => "MultipleTypeOpFixities"} ->
+        :error
+
+      %{"errorCode" => "MultipleValueOpFixities"} ->
+        :error
+
+      %{"errorCode" => "NameIsUndefined"} ->
+        :error
+
+      %{"errorCode" => "NoInstanceFound"} ->
+        :error
+
+      %{"errorCode" => "NonAssociativeError"} ->
+        :error
+
+      %{"errorCode" => "OrphanInstance"} ->
+        :error
+
+      %{"errorCode" => "OrphanKindDeclaration"} ->
+        :error
+
+      %{"errorCode" => "OrphanRoleDeclaration"} ->
+        :error
+
+      %{"errorCode" => "OrphanTypeDeclaration"} ->
+        :error
+
+      %{"errorCode" => "OverlappingArgNames"} ->
+        :error
+
+      %{"errorCode" => "OverlappingInstances"} ->
+        :error
+
+      %{"errorCode" => "OverlappingNamesInLet"} ->
+        :error
+
+      %{"errorCode" => "OverlappingPattern"} ->
+        :error
+
+      %{"errorCode" => "PartiallyAppliedSynonym"} ->
+        :error
+
+      %{"errorCode" => "PossiblyInfiniteCoercibleInstance"} ->
+        :error
+
+      %{"errorCode" => "PossiblyInfiniteInstance"} ->
+        :error
+
+      %{"errorCode" => "PropertyIsMissing"} ->
+        :error
+
+      %{"errorCode" => "PurerlError"} ->
+        :error
+
+      %{"errorCode" => "QuantificationCheckFailureInKind"} ->
+        :error
+
+      %{"errorCode" => "QuantificationCheckFailureInType"} ->
+        :error
+
+      %{"errorCode" => "RedefinedIdent"} ->
+        :error
+
+      %{"errorCode" => "RoleDeclarationArityMismatch"} ->
+        :error
+
+      %{"errorCode" => "RoleMismatch"} ->
+        :error
+
+      %{"errorCode" => "ScopeConflict"} ->
+        :error
+
+      %{"errorCode" => "ShadowedName"} ->
+        :error
+
+      %{"errorCode" => "TransitiveDctorExportError"} ->
+        :error
+
+      %{"errorCode" => "TransitiveExportError"} ->
+        :error
+
+      %{"errorCode" => "TypesDoNotUnify"} ->
+        :error
+
+      %{"errorCode" => "UndefinedTypeVariable"} ->
+        :error
+
+      %{"errorCode" => "UnknownClass"} ->
+        :error
+
+      %{"errorCode" => "UnknownExport"} ->
+        :error
+
+      %{"errorCode" => "UnknownExportDataConstructor"} ->
+        :error
+
+      %{"errorCode" => "UnknownImport"} ->
+        :error
+
+      %{"errorCode" => "UnknownImportDataConstructor"} ->
+        :error
+
+      %{"errorCode" => "UnknownName"} ->
+        :error
+
+      %{"errorCode" => "UnnecessaryFFIModule"} ->
+        :error
+
+      %{"errorCode" => "UnsupportedFFICommonJSExports"} ->
+        :error
+
+      %{"errorCode" => "UnsupportedFFICommonJSImports"} ->
+        :error
+
+      %{"errorCode" => "UnsupportedRoleDeclaration"} ->
+        :error
+
+      %{"errorCode" => "UnsupportedTypeInKind"} ->
+        :error
+
+      %{"errorCode" => "UnusableDeclaration"} ->
+        :error
+
+      %{"errorCode" => "UnusedDctorExplicitImport"} ->
+        :error
+
+      %{"errorCode" => "UnusedDctorImport"} ->
+        :error
+
+      %{"errorCode" => "UnusedDeclaration"} ->
+        :error
+
+      %{"errorCode" => "UnusedExplicitImport"} ->
+        :error
+
+      %{"errorCode" => "UnusedFFIImplementations"} ->
+        :error
+
+      %{"errorCode" => "UnusedImport"} ->
+        :error
+
+      %{"errorCode" => "UnusedName"} ->
+        :error
+
+      %{"errorCode" => "UnusedTypeVar"} ->
+        :error
+
+      %{"errorCode" => "UnverifiableSuperclassInstance"} ->
+        :error
+
+      %{"errorCode" => "UserDefinedWarning"} ->
+        :error
+
+      %{"errorCode" => "VisibleQuantificationCheckFailureInType"} ->
+        :error
+
+      %{"errorCode" => "WarningParsingCSTModule"} ->
+        :error
+
+      %{"errorCode" => "WildcardInferredType"} ->
+        :error
+
+      ###
+      _ ->
+        IO.inspect({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
+        :warn_msg
+    end
   end
 
   def apply_suggestion(%{
@@ -373,25 +1113,19 @@ defmodule DevHelpers.Purserl do
           "replacement" => replacement
         }
       }) do
-    IO.inspect({"applying suggestion", filename, replacement})
-    r_prefix_lines = "(?<prefix_lines>(([^\n]*\n){#{start_line - 1}}))"
-    r_prefix_columns = "(?<prefix_columns>(.{#{start_column - 1}}))"
-    r_infix_columns = "(?<infix_columns>(.{#{end_column - start_column}}))"
-    r_infix_lines = "(?<infix_lines>(([^\n]*\n){#{end_line - start_line}}))"
-    r_suffix_columns = "(?<suffix_columns>[^\n]*\n)"
-    r_suffix_lines = "(?<suffix_lines>[\\S\\s]*)"
-
-    r =
-      r_prefix_lines <>
-        r_prefix_columns <>
-        r_infix_columns <>
-        r_infix_lines <>
-        r_suffix_columns <>
-        r_suffix_lines
-
+    # NOTE[drathier]: we're reading the file contents back for each applied fix, so they all get applied. We could do them all in-memory, but this is easier to do. It's way past midnight.
     old_content = File.read!(filename)
 
-    reg = Regex.named_captures(Regex.compile!(r), old_content)
+    reg =
+      parse_out_span(%{
+        :file_contents_before => old_content,
+        :start_line => start_line,
+        :start_column => start_column,
+        :end_line => end_line,
+        :end_column => end_column
+      })
+
+    # IO.inspect({"applying suggestion", filename, replacement})
 
     # TODO[drathier]: why is there two trailing newlines in the suggested replacement?
     cleaned_replacement =
