@@ -439,9 +439,9 @@ defmodule DevHelpers.Purserl do
         },
         "suggestion" => _
       } ->
-        modu = module_name || filename
+        modu = Color.magenta() <> (module_name || filename) <> Color.reset()
 
-        modu_with_line = format_modu_with_line(modu, start_line)
+        path_with_line = format_path_with_line(filename, start_line)
 
         lines_of_context = 5
 
@@ -491,7 +491,7 @@ defmodule DevHelpers.Purserl do
                        (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
                     (snippet_context_post |> prefix_all_lines(" "))
 
-                ("  " <> format_modu_with_line(modu, start_line) <> "\n") <>
+                ("  " <> format_path_with_line(filename, start_line) <> "\n") <>
                   (code_snippet_with_context
                    |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
 
@@ -528,7 +528,7 @@ defmodule DevHelpers.Purserl do
           end
 
         (Color.cyan() <>
-           error_code <> Color.reset() <> " " <> tag <> " " <> modu_with_line <> "\n") <>
+           error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
           "\n" <>
           ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
              "\n") <>
@@ -546,12 +546,12 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def format_modu_with_line(modu, line) do
+  def format_path_with_line(path, line) do
     Color.magenta() <>
       if line do
-        modu <> ":" <> "#{line}"
+        path <> ":" <> "#{line}"
       else
-        modu
+        path
       end <>
       Color.reset()
   end
