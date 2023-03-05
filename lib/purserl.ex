@@ -24,7 +24,7 @@ defmodule DevHelpers.Purserl do
     # 4. init is done
     # 5. repeat step 3 forever, on `recompile`
 
-    IO.inspect({:init_purserl, config})
+    #IO.inspect({:init_purserl, config})
 
     state = %{
       port: nil,
@@ -134,7 +134,7 @@ defmodule DevHelpers.Purserl do
 
           {:error, _} ->
             # nope, print it
-            IO.puts(msg)
+            runtime_bug({"###", "FAILED_JSON_DECODE", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", msg})
             {:noreply, state}
         end
     end
@@ -279,8 +279,8 @@ defmodule DevHelpers.Purserl do
         end
       end)
       |> Enum.sort_by(fn x ->
-        %{"position" => %{"startColumn" => start_column, "startLine" => start_line, "endColumn" => end_column, "endLine" => end_line}} = x
-        {error_kind_ord(x), start_line, start_column, end_line, end_column}
+        %{"filename" => filename, "position" => %{"startColumn" => start_column, "startLine" => start_line, "endColumn" => end_column, "endLine" => end_line}} = x
+        {error_kind_ord(x), filename, start_line, start_column, end_line, end_column}
       end)
 
     file_contents_map =
@@ -325,113 +325,167 @@ defmodule DevHelpers.Purserl do
           :ignore ->
             []
 
+          :warn_msg ->
+            []
+
           :warn_fixable ->
-            [format_warning_or_error(:warn_fixable, x)]
+            [{x, format_warning_or_error(:warn_fixable, x)}]
 
           :warn_no_autofix ->
-            [format_warning_or_error(:warn_no_autofix, x)]
+            [{x, format_warning_or_error(:warn_no_autofix, x)}]
 
           :error ->
-            [format_warning_or_error(:error, x)]
+            [{x, format_warning_or_error(:error, x)}]
         end
       end)
 
-    to_print
-    |> Enum.map(&IO.puts/1)
+    to_print_chunked =
+      to_print
+      |> Enum.chunk_by(fn {x, _} -> x["filename"] end)
+
+    to_print_chunked
+    |> List.foldl(nil, fn chunk, previous ->
+      [{x, _} | _] = chunk
+
+      xname = x["moduleName"] || x["filename"]
+      rhs = " " <> xname <> " ====="
+      cond do
+        # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
+        true -> ""
+
+        previous == nil ->
+          Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
+
+        previous != nil && x["filename"] != previous["filename"] ->
+          previousname = previous["moduleName"] || previous["filename"]
+          Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
+          #Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
+
+        true ->
+          ""
+      end
+      |> IO.puts()
+
+      chunk
+      |> Enum.map(fn {_, text} -> text end)
+      |> Enum.map(&IO.puts/1)
+
+      x
+    end)
+  end
+
+  def mid_pad(pad, prefix, suffix) do
+    count = 120 - String.length(prefix) - String.length(suffix)
+    prefix <> String.duplicate(pad, max(10, count)) <> suffix
   end
 
   def format_warning_or_error(
         kind,
-        %{
-          # "allSpans" => [
-          #  %{"end" => '$\f', "name" => "lib/Shell.purs", "start" => [36, 1]}
-          # ],
-          :file_contents_before => old_content,
-          "allSpans" => all_spans,
-          # "CycleInDeclaration"
-          "errorCode" => error_code,
-          "errorLink" => _,
-          # "lib/Shell.purs"
-          "filename" => filename,
-          :kind => _,
-          # "  The value of qwer is undefined here, so this reference is not allowed.\n"
-          "message" => message,
-          # nil
-          "moduleName" => module_name,
-          "position" => %{
-            "endColumn" => _,
-            "endLine" => _,
-            "startColumn" => _,
-            "startLine" => start_line
-          },
-          "suggestion" => _
-        } = inp
+        inp
       ) do
-    modu = module_name || filename
+    case inp do
+      %{
+        # "allSpans" => [
+        #  %{"end" => '$\f', "name" => "lib/Shell.purs", "start" => [36, 1]}
+        # ],
+        :file_contents_before => old_content,
+        "allSpans" => all_spans,
+        # "CycleInDeclaration"
+        "errorCode" => error_code,
+        "errorLink" => _,
+        # "lib/Shell.purs"
+        "filename" => filename,
+        :kind => _,
+        # "  The value of qwer is undefined here, so this reference is not allowed.\n"
+        "message" => message,
+        # nil
+        "moduleName" => module_name,
+        "position" => %{
+          "endColumn" => _,
+          "endLine" => _,
+          "startColumn" => _,
+          "startLine" => start_line
+        },
+        "suggestion" => _
+      } ->
+        modu = module_name || filename
 
-    modu_with_line = format_modu_with_line(modu, start_line)
+        modu_with_line = format_modu_with_line(modu, start_line)
 
-    lines_of_context = 5
+        lines_of_context = 5
 
-    snippets =
-      all_spans
-      |> Enum.map(fn %{"name" => "lib/Shell.purs", "start" => [start_line, start_column], "end" => [end_line, end_column]} = inp ->
-        snippet =
-          parse_out_span(%{
-            :file_contents_before => old_content,
-            :start_line => start_line,
-            :start_column => start_column,
-            :end_line => end_line,
-            :end_column => end_column
-          })
+        snippets =
+          all_spans
+          |> Enum.map(fn inp ->
+            case inp do
+              %{"name" => _, "start" => [start_line, start_column], "end" => [end_line, end_column]} ->
+                snippet =
+                  parse_out_span(%{
+                    :file_contents_before => old_content,
+                    :start_line => start_line,
+                    :start_column => start_column,
+                    :end_line => end_line,
+                    :end_column => end_column
+                  })
 
-        snippet_context_pre =
-          ((snippet["prefix_lines"] |> String.split("\n") |> Enum.reverse() |> Enum.take(lines_of_context) |> Enum.reverse() |> Enum.join("\n")) <>
-             snippet["prefix_columns"])
-          |> String.trim_leading()
+                snippet_context_pre =
+                  ((snippet["prefix_lines"] |> String.split("\n") |> Enum.reverse() |> Enum.take(lines_of_context) |> Enum.reverse() |> Enum.join("\n")) <>
+                     snippet["prefix_columns"])
+                  |> String.trim_leading()
 
-        snippet_actual =
-          snippet["infix_columns"] <>
-            snippet["infix_lines"]
+                snippet_actual =
+                  snippet["infix_lines"] <>
+                    snippet["infix_columns"]
 
-        snippet_context_post =
-          (snippet["suffix_columns"] <>
-             (snippet["suffix_lines"] |> String.split("\n") |> Enum.take(lines_of_context) |> Enum.join("\n")))
-          |> String.trim_trailing()
+                snippet_context_post =
+                  (snippet["suffix_columns"] <>
+                     (snippet["suffix_lines"] |> String.split("\n") |> Enum.take(lines_of_context) |> Enum.join("\n")))
+                  |> String.trim_trailing()
 
-        code_snippet_with_context =
-          (snippet_context_pre |> prefix_all_lines(" ")) <>
-            (Color.yellow() <> (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
-            (snippet_context_post |> prefix_all_lines(" "))
+                code_snippet_with_context =
+                  (snippet_context_pre |> prefix_all_lines(" ")) <>
+                    (Color.yellow() <> (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
+                    (snippet_context_post |> prefix_all_lines(" "))
 
-        ("  " <> format_modu_with_line(modu, start_line) <> "\n") <>
-          (code_snippet_with_context |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
-      end)
+                ("  " <> format_modu_with_line(modu, start_line) <> "\n") <>
+                  (code_snippet_with_context |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
 
-    tag =
-      case kind do
-        :warn_fixable ->
-          Color.green() <> "Fixed" <> Color.reset()
+              _ ->
+                runtime_bug({"###", "UNEXPECTED_SNIPPET_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+                ""
+            end
+          end)
 
-        :warn_no_autofix ->
-          Color.magenta() <> "Warning" <> Color.reset()
+        tag =
+          case kind do
+            :warn_fixable ->
+              Color.green() <> "Fixed" <> Color.reset()
 
-        :error ->
-          Color.red() <> "Error" <> Color.reset()
+            :warn_no_autofix ->
+              Color.yellow() <> "Warning" <> Color.reset()
 
-        _ ->
-          IO.inspect({"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
-      end
+            :error ->
+              Color.red() <> "Error" <> Color.reset()
 
-    (Color.cyan() <> "[" <> error_code <> "]" <> Color.reset() <> " " <> tag <> " " <> Color.yellow() <> modu_with_line <> Color.reset() <> "\n") <>
-      "\n" <>
-      ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <> "\n") <>
-      Enum.join(snippets, "\n\n") <>
-      "\n\n"
+            _ ->
+              runtime_bug({"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+              ""
+          end
+
+        (Color.cyan() <> error_code <> Color.reset() <> " " <> tag <> " " <> modu_with_line <> "\n") <>
+          "\n" <>
+          ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <> "\n") <>
+          Enum.join(snippets, "\n\n") <>
+          "\n\n"
+
+      _ ->
+        runtime_bug({"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+        ""
+    end
   end
 
   def format_modu_with_line(modu, line) do
-    Color.yellow() <>
+    Color.magenta() <>
       if line do
         modu <> ":" <> "#{line}"
       else
@@ -620,16 +674,16 @@ defmodule DevHelpers.Purserl do
       ) do
     r_prefix_lines = "(?<prefix_lines>(([^\n]*\n){#{start_line - 1}}))"
     r_prefix_columns = "(?<prefix_columns>(.{#{start_column - 1}}))"
-    r_infix_columns = "(?<infix_columns>(.{#{end_column - start_column}}))"
     r_infix_lines = "(?<infix_lines>(([^\n]*\n){#{end_line - start_line}}))"
+    r_infix_columns = "(?<infix_columns>(.{#{end_column - start_column}}))"
     r_suffix_columns = "(?<suffix_columns>[^\n]*)"
     r_suffix_lines = "(?<suffix_lines>[\\S\\s]*)"
 
     r =
       r_prefix_lines <>
         r_prefix_columns <>
-        r_infix_columns <>
         r_infix_lines <>
+        r_infix_columns <>
         r_suffix_columns <>
         r_suffix_lines
 
@@ -643,6 +697,9 @@ defmodule DevHelpers.Purserl do
 
   def error_kind_ord(x) do
     case error_kind(x) do
+      :warn_msg ->
+        1
+
       :ignore ->
         1
 
@@ -680,7 +737,7 @@ defmodule DevHelpers.Purserl do
         :warn_fixable
 
       %{"errorCode" => "ImplicitQualifiedImport", "suggestion" => %{"replacement" => replacement}} ->
-        :warn_fixable
+        :ignore
 
       %{"errorCode" => "HidingImport", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
@@ -696,27 +753,50 @@ defmodule DevHelpers.Purserl do
 
       %{"errorCode" => "ImplicitImport", "suggestion" => %{"replacement" => replacement}} ->
         cond do
-          replacement |> String.starts_with?("import Joe") -> :ignore
-          replacement |> String.starts_with?("import Prelude") -> :ignore
-          true -> :warn_fixable
+          replacement |> String.starts_with?("import Joe") ->
+            :ignore
+
+          replacement |> String.starts_with?("import Prelude") ->
+            :ignore
+
+          true ->
+            :warn_no_autofix
         end
 
       # warn without autofix
-      %{"errorCode" => "ScopeShadowing"} ->
-        :warn_no_autofix
+      %{"errorCode" => "ScopeShadowing", "message" => message} ->
+        cond do
+          message |> String.contains?("import Joe") ->
+            :ignore
 
-      %{"errorCode" => "ShadowedTypeVar"} ->
-        :warn_no_autofix
+          message |> String.contains?("import Prelude") ->
+            :ignore
+
+          true ->
+            :warn_no_autofix
+        end
+
+      %{"errorCode" => "ShadowedTypeVar", "filename" => filename} ->
+        cond do
+          filename |> String.contains?("Data/Veither.purs") ->
+            :ignore
+
+          filename |> String.contains?("Vendor") ->
+            :ignore
+
+          true ->
+            :warn_no_autofix
+        end
 
       %{"errorCode" => "ImplicitQualifiedImportReExport"} ->
         :warn_no_autofix
 
       %{"errorCode" => "HiddenConstructors"} ->
-        :warn_no_autofix
+        :ignore
 
       # ignored
       %{"errorCode" => "WildcardInferredType"} ->
-        :ignored
+        :ignore
 
       # errors
       %{"errorCode" => "AdditionalProperty"} ->
@@ -1094,11 +1174,18 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "WildcardInferredType"} ->
         :error
 
+      %{"errorCode" => "ErrorParsingModule"} ->
+        :error
+
       ###
       _ ->
-        IO.inspect({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
+        runtime_bug({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
         :warn_msg
     end
+  end
+
+  def runtime_bug(msg) do
+    IO.inspect(msg, width: :infinity, printable_limit: :infinity, limit: :infinity)
   end
 
   def apply_suggestion(%{
