@@ -24,7 +24,7 @@ defmodule DevHelpers.Purserl do
     # 4. init is done
     # 5. repeat step 3 forever, on `recompile`
 
-    #IO.inspect({:init_purserl, config})
+    # IO.inspect({:init_purserl, config})
 
     state = %{
       port: nil,
@@ -134,7 +134,7 @@ defmodule DevHelpers.Purserl do
 
           {:error, _} ->
             # nope, print it
-            runtime_bug({"###", "FAILED_JSON_DECODE", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", msg})
+            IO.puts(msg)
             {:noreply, state}
         end
     end
@@ -210,13 +210,23 @@ defmodule DevHelpers.Purserl do
           retries <= 10 ->
             sleep_time = retries * 100
             Process.sleep(sleep_time)
+
             # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
             compile_erlang(source, retries + 1)
 
           true ->
-            IO.puts("#############################################################################")
-            IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
-            IO.puts("#############################################################################")
+            IO.puts(
+              "#############################################################################"
+            )
+
+            IO.puts(
+              "####### Erl compiler failed to run; something has gone terribly wrong #######"
+            )
+
+            IO.puts(
+              "#############################################################################"
+            )
+
             raise CompileError
         end
     end
@@ -279,7 +289,16 @@ defmodule DevHelpers.Purserl do
         end
       end)
       |> Enum.sort_by(fn x ->
-        %{"filename" => filename, "position" => %{"startColumn" => start_column, "startLine" => start_line, "endColumn" => end_column, "endLine" => end_line}} = x
+        %{
+          "filename" => filename,
+          "position" => %{
+            "startColumn" => start_column,
+            "startLine" => start_line,
+            "endColumn" => end_column,
+            "endLine" => end_line
+          }
+        } = x
+
         {error_kind_ord(x), filename, start_line, start_column, end_line, end_column}
       end)
 
@@ -310,7 +329,16 @@ defmodule DevHelpers.Purserl do
 
     reverse_sorted_applications =
       should_be_fixed_automatically
-      |> Enum.sort_by(fn %{"suggestion" => %{"replaceRange" => %{"startColumn" => start_column, "startLine" => start_line, "endColumn" => end_column, "endLine" => end_line}}} ->
+      |> Enum.sort_by(fn %{
+                           "suggestion" => %{
+                             "replaceRange" => %{
+                               "startColumn" => start_column,
+                               "startLine" => start_line,
+                               "endColumn" => end_column,
+                               "endLine" => end_line
+                             }
+                           }
+                         } ->
         {start_line, start_column, end_line, end_column}
       end)
       |> Enum.reverse()
@@ -349,9 +377,11 @@ defmodule DevHelpers.Purserl do
 
       xname = x["moduleName"] || x["filename"]
       rhs = " " <> xname <> " ====="
+
       cond do
         # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
-        true -> ""
+        true ->
+          ""
 
         previous == nil ->
           Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
@@ -359,7 +389,8 @@ defmodule DevHelpers.Purserl do
         previous != nil && x["filename"] != previous["filename"] ->
           previousname = previous["moduleName"] || previous["filename"]
           Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
-          #Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
+
+        # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
 
         true ->
           ""
@@ -418,7 +449,11 @@ defmodule DevHelpers.Purserl do
           all_spans
           |> Enum.map(fn inp ->
             case inp do
-              %{"name" => _, "start" => [start_line, start_column], "end" => [end_line, end_column]} ->
+              %{
+                "name" => _,
+                "start" => [start_line, start_column],
+                "end" => [end_line, end_column]
+              } ->
                 snippet =
                   parse_out_span(%{
                     :file_contents_before => old_content,
@@ -429,7 +464,12 @@ defmodule DevHelpers.Purserl do
                   })
 
                 snippet_context_pre =
-                  ((snippet["prefix_lines"] |> String.split("\n") |> Enum.reverse() |> Enum.take(lines_of_context) |> Enum.reverse() |> Enum.join("\n")) <>
+                  ((snippet["prefix_lines"]
+                    |> String.split("\n")
+                    |> Enum.reverse()
+                    |> Enum.take(lines_of_context)
+                    |> Enum.reverse()
+                    |> Enum.join("\n")) <>
                      snippet["prefix_columns"])
                   |> String.trim_leading()
 
@@ -439,19 +479,29 @@ defmodule DevHelpers.Purserl do
 
                 snippet_context_post =
                   (snippet["suffix_columns"] <>
-                     (snippet["suffix_lines"] |> String.split("\n") |> Enum.take(lines_of_context) |> Enum.join("\n")))
+                     (snippet["suffix_lines"]
+                      |> String.split("\n")
+                      |> Enum.take(lines_of_context)
+                      |> Enum.join("\n")))
                   |> String.trim_trailing()
 
                 code_snippet_with_context =
                   (snippet_context_pre |> prefix_all_lines(" ")) <>
-                    (Color.yellow() <> (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
+                    (Color.yellow() <>
+                       (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
                     (snippet_context_post |> prefix_all_lines(" "))
 
                 ("  " <> format_modu_with_line(modu, start_line) <> "\n") <>
-                  (code_snippet_with_context |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
+                  (code_snippet_with_context
+                   |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
 
               _ ->
-                runtime_bug({"###", "UNEXPECTED_SNIPPET_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+                runtime_bug(
+                  {"###", "UNEXPECTED_SNIPPET_FORMAT",
+                   "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
+                   kind, inp}
+                )
+
                 ""
             end
           end)
@@ -468,18 +518,30 @@ defmodule DevHelpers.Purserl do
               Color.red() <> "Error" <> Color.reset()
 
             _ ->
-              runtime_bug({"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+              runtime_bug(
+                {"###", "UNEXPECTED_ERROR_KIND",
+                 "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
+                 kind, inp}
+              )
+
               ""
           end
 
-        (Color.cyan() <> error_code <> Color.reset() <> " " <> tag <> " " <> modu_with_line <> "\n") <>
+        (Color.cyan() <>
+           error_code <> Color.reset() <> " " <> tag <> " " <> modu_with_line <> "\n") <>
           "\n" <>
-          ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <> "\n") <>
+          ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
+             "\n") <>
           Enum.join(snippets, "\n\n") <>
           "\n\n"
 
       _ ->
-        runtime_bug({"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+        runtime_bug(
+          {"###", "UNEXPECTED_WARN_FORMAT",
+           "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
+           kind, inp}
+        )
+
         ""
     end
   end
@@ -589,7 +651,10 @@ defmodule DevHelpers.Purserl do
         Enum.member?(purescript_keywords, x) ->
           Color.yellow() <> x <> Color.reset()
 
-        x |> String.split("") |> Enum.filter(fn c -> c != "" end) |> Enum.all?(fn c -> Enum.member?(purescript_infix_operator_characters, c) end) ->
+        x
+        |> String.split("")
+        |> Enum.filter(fn c -> c != "" end)
+        |> Enum.all?(fn c -> Enum.member?(purescript_infix_operator_characters, c) end) ->
           Color.magenta() <> x <> Color.reset()
 
         String.first(String.trim(x)) == "\"" ->
@@ -655,7 +720,9 @@ defmodule DevHelpers.Purserl do
 
       next_kind == :done || next_kind != kind ->
         # move curr into acc
-        tokenize(purescript_infix_operator_characters, str, next_kind, [], [Enum.reverse(curr) |> Enum.join("") | acc])
+        tokenize(purescript_infix_operator_characters, str, next_kind, [], [
+          Enum.reverse(curr) |> Enum.join("") | acc
+        ])
 
       next_kind == kind ->
         # append to curr
@@ -733,7 +800,10 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "UnusedDctorImport", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "UnusedDctorExplicitImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{
+        "errorCode" => "UnusedDctorExplicitImport",
+        "suggestion" => %{"replacement" => replacement}
+      } ->
         :warn_fixable
 
       %{"errorCode" => "ImplicitQualifiedImport", "suggestion" => %{"replacement" => replacement}} ->
@@ -1179,7 +1249,12 @@ defmodule DevHelpers.Purserl do
 
       ###
       _ ->
-        runtime_bug({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
+        runtime_bug(
+          {"###", "UNHANDLED_SUGGESTION_TAG",
+           "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
+           x}
+        )
+
         :warn_msg
     end
   end
