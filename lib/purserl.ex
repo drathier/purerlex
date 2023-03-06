@@ -754,8 +754,18 @@ defmodule DevHelpers.Purserl do
         r_suffix_columns <>
         r_suffix_lines
 
-    reg = Regex.named_captures(Regex.compile!(r), old_content)
-    reg
+    case Regex.named_captures(Regex.compile!(r), old_content) do
+      nil ->
+        %{
+          "prefix_lines" => "",
+          "prefix_columns" => "",
+          "infix_lines" => "Failed to parse out error snippet",
+          "infix_columns" => "",
+          "suffix_columns" => "",
+          "suffix_lines" => ""
+        }
+      v -> v
+    end
   end
 
   def can_be_fixed_automatically?(x) do
