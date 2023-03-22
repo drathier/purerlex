@@ -387,7 +387,6 @@ defmodule DevHelpers.Purserl do
           Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
         previous != nil && x["filename"] != previous["filename"] ->
-          previousname = previous["moduleName"] || previous["filename"]
           Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
         # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
@@ -435,13 +434,11 @@ defmodule DevHelpers.Purserl do
           "endColumn" => _,
           "endLine" => _,
           "startColumn" => _,
-          "startLine" => start_line
+          "startLine" => _,
         },
         "suggestion" => _
       } ->
         modu = Color.magenta() <> (module_name || filename) <> Color.reset()
-
-        path_with_line = format_path_with_line(filename, start_line)
 
         lines_of_context = 5
 
@@ -737,7 +734,7 @@ defmodule DevHelpers.Purserl do
           :start_column => start_column,
           :end_line => end_line,
           :end_column => end_column
-        } = inp
+        }
       ) do
     r_prefix_lines = "(?<prefix_lines>(([^\n]*\n){#{start_line - 1}}))"
     r_prefix_columns = "(?<prefix_columns>(.{#{start_column - 1}}))"
