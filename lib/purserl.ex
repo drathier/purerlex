@@ -440,7 +440,7 @@ defmodule DevHelpers.Purserl do
       } ->
         modu = Color.magenta() <> (module_name || filename) <> Color.reset()
 
-        lines_of_context = 5
+        lines_of_context = 0
 
         snippets =
           all_spans
