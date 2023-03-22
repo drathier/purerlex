@@ -12,7 +12,7 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def env_varaibles() do
+  def env_variables() do
     [{'PURS_LOOP_EVERY_SECOND', '1'}, {'PURS_FORCE_COLOR', '1'}]
   end
 
@@ -61,7 +61,7 @@ defmodule DevHelpers.Purserl do
         :binary,
         :exit_status,
         :stderr_to_stdout,
-        {:env, env_varaibles()},
+        {:env, env_variables()},
         {:line, 999_999_999}
       ])
 
@@ -234,7 +234,7 @@ defmodule DevHelpers.Purserl do
 
   def spawn_port(cmd) do
     # cmd_str = "spago build --purs-args \"--codegen erl\" -v --no-psa"
-    port = Port.open({:spawn, cmd}, [:binary, {:env, env_varaibles()}])
+    port = Port.open({:spawn, cmd}, [:binary, {:env, env_variables()}])
     port
   end
 
