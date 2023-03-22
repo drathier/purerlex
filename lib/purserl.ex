@@ -807,10 +807,7 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "UnusedDctorImport", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
-      %{
-        "errorCode" => "UnusedDctorExplicitImport",
-        "suggestion" => %{"replacement" => replacement}
-      } ->
+      %{ "errorCode" => "UnusedDctorExplicitImport", "suggestion" => %{"replacement" => replacement} } ->
         :warn_fixable
 
       %{"errorCode" => "ImplicitQualifiedImport", "suggestion" => %{"replacement" => replacement}} ->
@@ -827,6 +824,33 @@ defmodule DevHelpers.Purserl do
 
       %{"errorCode" => "WarningParsingModule", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
+
+      %{"errorCode" => "UnusedTypeVar", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "UserDefinedWarning"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "UnusedDeclaration"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "UnusedFFIImplementations"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "UnusedName"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "MissingKindDeclaration"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "MissingNewtypeSuperclassInstance"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "MissingTypeDeclaration"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "ShadowedName"} ->
+        :warn_no_autofix
 
       %{"errorCode" => "ImplicitImport", "suggestion" => %{"replacement" => replacement}} ->
         cond do
@@ -875,12 +899,11 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "WildcardInferredType"} ->
         :ignore
 
-      # errors
       %{"errorCode" => "AdditionalProperty"} ->
-        :error
+        :warn_no_autofix
 
       %{"errorCode" => "AmbiguousTypeVariables"} ->
-        :error
+        :warn_no_autofix
 
       %{"errorCode" => "ArgListLengthsDiffer"} ->
         :error
@@ -1008,9 +1031,6 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "HoleInferredType"} ->
         :error
 
-      %{"errorCode" => "ImplicitQualifiedImportReExport"} ->
-        :error
-
       %{"errorCode" => "ImportHidingModule"} ->
         :error
 
@@ -1072,15 +1092,6 @@ defmodule DevHelpers.Purserl do
         :error
 
       %{"errorCode" => "MissingFFIModule"} ->
-        :error
-
-      %{"errorCode" => "MissingKindDeclaration"} ->
-        :error
-
-      %{"errorCode" => "MissingNewtypeSuperclassInstance"} ->
-        :error
-
-      %{"errorCode" => "MissingTypeDeclaration"} ->
         :error
 
       %{"errorCode" => "MixedAssociativityError"} ->
@@ -1161,9 +1172,6 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "ScopeConflict"} ->
         :error
 
-      %{"errorCode" => "ShadowedName"} ->
-        :error
-
       %{"errorCode" => "TransitiveDctorExportError"} ->
         :error
 
@@ -1212,40 +1220,10 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "UnusableDeclaration"} ->
         :error
 
-      %{"errorCode" => "UnusedDctorExplicitImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedDctorImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedDeclaration"} ->
-        :error
-
-      %{"errorCode" => "UnusedExplicitImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedFFIImplementations"} ->
-        :error
-
-      %{"errorCode" => "UnusedImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedName"} ->
-        :error
-
-      %{"errorCode" => "UnusedTypeVar"} ->
-        :error
-
       %{"errorCode" => "UnverifiableSuperclassInstance"} ->
         :error
 
-      %{"errorCode" => "UserDefinedWarning"} ->
-        :error
-
       %{"errorCode" => "VisibleQuantificationCheckFailureInType"} ->
-        :error
-
-      %{"errorCode" => "WildcardInferredType"} ->
         :error
 
       ###
