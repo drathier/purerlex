@@ -12,7 +12,7 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def env_varaibles() do
+  def env_variables() do
     [{'PURS_LOOP_EVERY_SECOND', '1'}, {'PURS_FORCE_COLOR', '1'}]
   end
 
@@ -61,7 +61,7 @@ defmodule DevHelpers.Purserl do
         :binary,
         :exit_status,
         :stderr_to_stdout,
-        {:env, env_varaibles()},
+        {:env, env_variables()},
         {:line, 999_999_999}
       ])
 
@@ -234,7 +234,7 @@ defmodule DevHelpers.Purserl do
 
   def spawn_port(cmd) do
     # cmd_str = "spago build --purs-args \"--codegen erl\" -v --no-psa"
-    port = Port.open({:spawn, cmd}, [:binary, {:env, env_varaibles()}])
+    port = Port.open({:spawn, cmd}, [:binary, {:env, env_variables()}])
     port
   end
 
@@ -387,7 +387,6 @@ defmodule DevHelpers.Purserl do
           Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
         previous != nil && x["filename"] != previous["filename"] ->
-          previousname = previous["moduleName"] || previous["filename"]
           Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
         # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
@@ -435,15 +434,13 @@ defmodule DevHelpers.Purserl do
           "endColumn" => _,
           "endLine" => _,
           "startColumn" => _,
-          "startLine" => start_line
+          "startLine" => _
         },
         "suggestion" => _
       } ->
         modu = Color.magenta() <> (module_name || filename) <> Color.reset()
 
-        path_with_line = format_path_with_line(filename, start_line)
-
-        lines_of_context = 5
+        lines_of_context = 2
 
         snippets =
           all_spans
@@ -463,37 +460,20 @@ defmodule DevHelpers.Purserl do
                     :end_column => end_column
                   })
 
-                snippet_context_pre =
-                  ((snippet["prefix_lines"]
-                    |> String.split("\n")
-                    |> Enum.reverse()
-                    |> Enum.take(lines_of_context)
-                    |> Enum.reverse()
-                    |> Enum.join("\n")) <>
-                     snippet["prefix_columns"])
-                  |> String.trim_leading()
-
                 snippet_actual =
-                  snippet["infix_lines"] <>
-                    snippet["infix_columns"]
+                  (snippet["infix_lines"] <> snippet["infix_columns"])
+                  |> String.split("\n")
+                  |> Enum.with_index()
+                  |> Enum.map(fn {offset, line} ->
+                    line_nr =
+                      (offset + start_line) |> Integer.to_string() |> String.pad_leading(4, "")
 
-                snippet_context_post =
-                  (snippet["suffix_columns"] <>
-                     (snippet["suffix_lines"]
-                      |> String.split("\n")
-                      |> Enum.take(lines_of_context)
-                      |> Enum.join("\n")))
-                  |> String.trim_trailing()
-
-                code_snippet_with_context =
-                  (snippet_context_pre |> prefix_all_lines(" ")) <>
-                    (Color.yellow() <>
-                       (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
-                    (snippet_context_post |> prefix_all_lines(" "))
+                    " " <> Color.yellow() <> line_nr <> Color.reset() <> " | " <> line
+                  end)
+                  |> Enum.take(3)
 
                 ("  " <> format_path_with_line(filename, start_line) <> "\n") <>
-                  (code_snippet_with_context
-                   |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
+                  snippet_actual
 
               _ ->
                 runtime_bug(
@@ -527,13 +507,14 @@ defmodule DevHelpers.Purserl do
               ""
           end
 
-        (Color.cyan() <>
-           error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
-          "\n" <>
-          ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
-             "\n") <>
-          Enum.join(snippets, "\n\n") <>
-          "\n\n"
+        (case snippets do
+           # If it's more than 2 spans, we just give up because that much context is too noisy
+           [a] -> a
+           [a, b] -> a <> "\n\n" <> b
+           _ -> "<<< not printing spans, because there's more than 2. Complain to ET if this ever happens >>>"
+         end <> Color.cyan() <> error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n\n") <>
+          prefix_all_lines_if_missing("  ", message) <>
+          "\n\n\n"
 
       _ ->
         runtime_bug(
@@ -571,7 +552,7 @@ defmodule DevHelpers.Purserl do
     |> Enum.join("\n")
   end
 
-  def add_prefix_if_missing(str, prefix) do
+  def prefix_all_lines_if_missing(str, prefix) do
     str
     |> String.split("\n")
     |> Enum.map(fn x ->
@@ -586,159 +567,13 @@ defmodule DevHelpers.Purserl do
     |> Enum.join("\n")
   end
 
-  def syntax_highlight_indentex_lines(str, prefix) do
-    str
-    |> String.split("\n")
-    |> Enum.map(fn x ->
-      cond do
-        x |> String.starts_with?(prefix) ->
-          prefixless = x |> String.trim_leading(prefix)
-          prefix_row = x |> String.slice(0..(-String.length(prefixless) - 1))
-          prefix_row <> hacky_syntax_highlight(x)
-
-        true ->
-          x
-      end
-    end)
-    |> Enum.join("\n")
-  end
-
-  def hacky_syntax_highlight(str) do
-    purescript_keywords = [
-      "∀",
-      "forall",
-      "ado",
-      "as",
-      "case",
-      "class",
-      "data",
-      "derive",
-      "do",
-      "else",
-      "false",
-      "foreign",
-      "hiding",
-      "import",
-      "if",
-      "in",
-      "infix",
-      "infixl",
-      "infixr",
-      "instance",
-      "let",
-      "module",
-      "newtype",
-      "nominal",
-      "phantom",
-      "of",
-      "representational",
-      "role",
-      "then",
-      "true",
-      # "type", # false positives
-      "where"
-    ]
-
-    purescript_infix_operator_characters =
-      "!#€%&/()=?©@£$∞§|[]≈±¡”¥¢‰{}≠¿'*¨^<>-,:;\\"
-      |> String.split("")
-      |> Enum.filter(fn x -> x != "" end)
-
-    tokenize(purescript_infix_operator_characters, str)
-    |> Enum.filter(fn x -> x != "" end)
-    |> Enum.map(fn x ->
-      cond do
-        Enum.member?(purescript_keywords, x) ->
-          Color.yellow() <> x <> Color.reset()
-
-        x
-        |> String.split("")
-        |> Enum.filter(fn c -> c != "" end)
-        |> Enum.all?(fn c -> Enum.member?(purescript_infix_operator_characters, c) end) ->
-          Color.magenta() <> x <> Color.reset()
-
-        String.first(String.trim(x)) == "\"" ->
-          Color.green() <> x <> Color.reset()
-
-        String.first(x) == String.upcase(String.first(x)) ->
-          Color.cyan() <> x <> Color.reset()
-
-        true ->
-          x
-      end
-    end)
-    |> Enum.join("")
-  end
-
-  def tokenize(purescript_infix_operator_characters, str, kind \\ nil, curr \\ [], acc \\ []) do
-    {next_kind, ch, rest} =
-      case str do
-        # enter quote
-        <<"\"", rest::binary>> when kind != :quote ->
-          {:quote, "\"", rest}
-
-        <<"\"", rest::binary>> when kind != :quote ->
-          {:quote, "\"", rest}
-
-        # quoted strings and escape sequences
-        <<"\\", c2::binary-size(1), rest::binary>> when kind == :quote ->
-          {:quote, "\\" <> c2, rest}
-
-        # end quote
-        <<"\"", rest::binary>> when kind == :quote ->
-          {:end_quote, "\"", rest}
-
-        # non-quote
-        <<c::binary-size(1)>> <> rest ->
-          cond do
-            kind == :quote ->
-              {:quote, c, rest}
-
-            # other
-            c |> String.trim() != c ->
-              {:space, c, rest}
-
-            Enum.member?(purescript_infix_operator_characters, c) ->
-              {:op, c, rest}
-
-            true ->
-              {:word, c, rest}
-          end
-
-        "" ->
-          {:done, "", ""}
-      end
-
-    cond do
-      curr == [] && next_kind == :done ->
-        # all done
-        Enum.reverse(acc) |> Enum.filter(fn c -> c != "" end)
-
-      next_kind == :quote || next_kind == :end_quote ->
-        # append to curr and move on
-        tokenize(purescript_infix_operator_characters, rest, next_kind, [ch | curr], acc)
-
-      next_kind == :done || next_kind != kind ->
-        # move curr into acc
-        tokenize(purescript_infix_operator_characters, str, next_kind, [], [
-          Enum.reverse(curr) |> Enum.join("") | acc
-        ])
-
-      next_kind == kind ->
-        # append to curr
-        tokenize(purescript_infix_operator_characters, rest, next_kind, [ch | curr], acc)
-    end
-  end
-
-  def parse_out_span(
-        %{
-          :file_contents_before => old_content,
-          :start_line => start_line,
-          :start_column => start_column,
-          :end_line => end_line,
-          :end_column => end_column
-        } = inp
-      ) do
+  def parse_out_span(%{
+        :file_contents_before => old_content,
+        :start_line => start_line,
+        :start_column => start_column,
+        :end_line => end_line,
+        :end_column => end_column
+      }) do
     r_prefix_lines = "(?<prefix_lines>(([^\n]*\n){#{start_line - 1}}))"
     r_prefix_columns = "(?<prefix_columns>(.{#{start_column - 1}}))"
     r_infix_lines = "(?<infix_lines>(([^\n]*\n){#{end_line - start_line}}))"
@@ -764,7 +599,9 @@ defmodule DevHelpers.Purserl do
           "suffix_columns" => "",
           "suffix_lines" => ""
         }
-      v -> v
+
+      v ->
+        v
     end
   end
 
@@ -831,6 +668,33 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "WarningParsingModule", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
+      %{"errorCode" => "UnusedTypeVar", "suggestion" => %{"replacement" => replacement}} ->
+        :warn_fixable
+
+      %{"errorCode" => "UserDefinedWarning"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "UnusedDeclaration"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "UnusedFFIImplementations"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "UnusedName"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "MissingKindDeclaration"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "MissingNewtypeSuperclassInstance"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "MissingTypeDeclaration"} ->
+        :warn_no_autofix
+
+      %{"errorCode" => "ShadowedName"} ->
+        :warn_no_autofix
+
       %{"errorCode" => "ImplicitImport", "suggestion" => %{"replacement" => replacement}} ->
         cond do
           replacement |> String.starts_with?("import Joe") ->
@@ -878,12 +742,11 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "WildcardInferredType"} ->
         :ignore
 
-      # errors
       %{"errorCode" => "AdditionalProperty"} ->
-        :error
+        :warn_no_autofix
 
       %{"errorCode" => "AmbiguousTypeVariables"} ->
-        :error
+        :warn_no_autofix
 
       %{"errorCode" => "ArgListLengthsDiffer"} ->
         :error
@@ -1011,9 +874,6 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "HoleInferredType"} ->
         :error
 
-      %{"errorCode" => "ImplicitQualifiedImportReExport"} ->
-        :error
-
       %{"errorCode" => "ImportHidingModule"} ->
         :error
 
@@ -1075,15 +935,6 @@ defmodule DevHelpers.Purserl do
         :error
 
       %{"errorCode" => "MissingFFIModule"} ->
-        :error
-
-      %{"errorCode" => "MissingKindDeclaration"} ->
-        :error
-
-      %{"errorCode" => "MissingNewtypeSuperclassInstance"} ->
-        :error
-
-      %{"errorCode" => "MissingTypeDeclaration"} ->
         :error
 
       %{"errorCode" => "MixedAssociativityError"} ->
@@ -1164,9 +1015,6 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "ScopeConflict"} ->
         :error
 
-      %{"errorCode" => "ShadowedName"} ->
-        :error
-
       %{"errorCode" => "TransitiveDctorExportError"} ->
         :error
 
@@ -1215,40 +1063,10 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "UnusableDeclaration"} ->
         :error
 
-      %{"errorCode" => "UnusedDctorExplicitImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedDctorImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedDeclaration"} ->
-        :error
-
-      %{"errorCode" => "UnusedExplicitImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedFFIImplementations"} ->
-        :error
-
-      %{"errorCode" => "UnusedImport"} ->
-        :error
-
-      %{"errorCode" => "UnusedName"} ->
-        :error
-
-      %{"errorCode" => "UnusedTypeVar"} ->
-        :error
-
       %{"errorCode" => "UnverifiableSuperclassInstance"} ->
         :error
 
-      %{"errorCode" => "UserDefinedWarning"} ->
-        :error
-
       %{"errorCode" => "VisibleQuantificationCheckFailureInType"} ->
-        :error
-
-      %{"errorCode" => "WildcardInferredType"} ->
         :error
 
       ###
