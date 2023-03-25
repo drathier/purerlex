@@ -511,7 +511,7 @@ defmodule DevHelpers.Purserl do
            # If it's more than 2 spans, we just give up because that much context is too noisy
            [a] -> a
            [a, b] -> a <> "\n\n" <> b
-           _ -> "<<< not printing spans, because there's more than 2. Complain to ET if this ever happens >>"
+           _ -> "<<< not printing spans, because there's more than 2. Complain to ET if this ever happens >>>"
          end <> Color.cyan() <> error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n\n") <>
           prefix_all_lines_if_missing("  ", message) <>
           "\n\n\n"
