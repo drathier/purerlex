@@ -32,8 +32,20 @@ defmodule DevHelpers.Purserl do
       purs_cmd: nil,
       purs_args: config |> Keyword.get(:purs_args, ""),
       ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
-      ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).()
+      ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).(),
+      single_line_compile_output: config |> Keyword.get(:single_line_compile_output, false),
+      logfile:
+        case config |> Keyword.get(:logfile_path, nil) do
+          nil ->
+            nil
+
+          path ->
+            File.open!(path, [:utf8, :append])
+            # path -> File.open!(path, [:utf8, :append, :compressed])
+        end
     }
+
+    log("init", {config, System.get_env()}, state)
 
     # NOTE[drathier]: don't attempt this shit anymore. Just put in `erlc_paths: ["output"]` and live with it. It's incredibly hard to speed things up further. Whenever it starts recompiling 30+ files for no reason, nuke the entire _build folder and do a clean build.
     # IO.inspect({:pre_mix_erlang})
@@ -56,13 +68,17 @@ defmodule DevHelpers.Purserl do
     cmd = 'spago build --purs-args \"--codegen erl\" -v --no-psa'
 
     port =
-      Port.open({:spawn, cmd}, [
-        :binary,
-        :exit_status,
-        :stderr_to_stdout,
-        {:env, [{'PURS_LOOP_EVERY_SECOND', '0'}]},
-        {:line, 999_999_999}
-      ])
+      port_open(
+        {:spawn, cmd},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          {:env, [{'PURS_LOOP_EVERY_SECOND', '0'}]},
+          {:line, 999_999_999}
+        ],
+        state
+      )
 
     state = %{state | port: port}
     {:ok, state}
@@ -70,26 +86,63 @@ defmodule DevHelpers.Purserl do
 
   def run_purs(state) do
     port =
-      Port.open({:spawn, state.purs_cmd <> " " <> state.purs_args}, [
-        :binary,
-        :exit_status,
-        :stderr_to_stdout,
-        {:env, env_variables()},
-        {:line, 999_999_999}
-      ])
+      port_open(
+        {:spawn, state.purs_cmd <> " " <> state.purs_args},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          {:env, env_variables()},
+          {:line, 999_999_999}
+        ],
+        state
+      )
 
     # send one newline to trigger a first recompile, in case nothing needed to be rebuilt. Out handle_info is looking for a "done compiler" message, which is printed when compilation finishes
-    _ = Port.command(port, 'first\n', [])
+    _ = port_command(port, 'first\n', [], state)
 
     {:ok, %{state | port: port}}
   end
 
+  # logging wrappers
+  def port_open(arg, opts, state) do
+    log("port_open", {arg, opts}, state)
+    Port.open(arg, opts)
+  end
+
+  def port_command(port, msg, opts, state) do
+    log("port_command", {port, msg, opts}, state)
+    Port.command(port, msg, opts)
+  end
+
+  def port_close(port, state) do
+    log("port_close", {port}, state)
+    Port.close(port)
+  end
+
+  def log(tag, msg, state) do
+    case state.logfile do
+      nil ->
+        nil
+
+      f ->
+        contents = {DateTime.utc_now() |> DateTime.to_iso8601(), tag, msg}
+        contents_str = inspect(contents, width: :infinity, printable_limit: :infinity, limit: :infinity)
+        IO.puts(f, contents_str)
+    end
+
+    nil
+  end
+
   @impl true
   def handle_info({_port, {:data, {:eol, msg}}}, state) do
+    # log whenever we get something, if applicable
+    log("handle_info", msg, state)
+
     cond do
       # spago
       msg |> String.contains?("Running command: `purs compile") ->
-        Port.close(state.port)
+        port_close(state.port, state)
 
         {:ok, cmd} = extract_purs_cmd(msg)
         {:ok, state} = run_purs(%{state | port: nil, purs_cmd: cmd})
@@ -124,7 +177,7 @@ defmodule DevHelpers.Purserl do
             # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
             cond do
               path_to_changed_file |> String.ends_with?(".erl") ->
-                compile_erlang(path_to_changed_file)
+                compile_erlang(path_to_changed_file, state)
 
               true ->
                 nil
@@ -146,9 +199,18 @@ defmodule DevHelpers.Purserl do
             {:noreply, state}
 
           {:error, _} ->
-            # nope, print it
-            IO.puts(msg)
-            {:noreply, state}
+            # nope, is it a "[123 of 456] Compiling ..." line?
+            cond do
+              msg |> String.contains?(" Compiling ") ->
+                # NOTE[drathier]: this eats the last line before this runs, which is either the warning that there were no source files found using some pattern, or the line that says that the app finished building. Not worth fixing, but printing a newline first if it contains `[1 of` is the easy fix, so we have a line to demolish.
+                IO.puts(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
+                {:noreply, state}
+
+              true ->
+                # nope, print it
+                IO.puts(msg)
+                {:noreply, state}
+            end
         end
     end
   end
@@ -161,12 +223,12 @@ defmodule DevHelpers.Purserl do
 
   @impl true
   def handle_call(:shutdown_compiler, _from, state) do
-    Port.close(state.port)
+    port_close(state.port, state)
     {:stop, "was told to stop", state}
   end
 
   def handle_call(:recompile, from, state) do
-    _ = Port.command(state.port, 'sdf\n', [])
+    _ = port_command(state.port, 'sdf\n', [], state)
     {:noreply, %{state | caller: from}}
   end
 
@@ -204,29 +266,36 @@ defmodule DevHelpers.Purserl do
   ###
 
   # Compiles and loads an Erlang source file, returns {module, binary}
-  defp compile_erlang(source, retries \\ 0) do
+  defp compile_erlang(source, state, retries \\ 0) do
+    log("compile_erlang", {source, retries}, state)
     source = Path.relative_to_cwd(source) |> String.to_charlist()
 
-    case :compile.file(source, [:binary, :report]) do
-      {:ok, module, binary} ->
+    case :compile.file(source, [:binary, :return_warnings]) do
+      {:ok, module, binary, warnings} ->
         # write newly compiled file to disk as beam file
         base = source |> Path.basename() |> Path.rootname()
-        File.write!(Path.join(Mix.Project.compile_path(), base <> ".beam"), binary)
+        target_path = Path.join(Mix.Project.compile_path(), base <> ".beam")
+        log("compile_erlang:compiled_ok", {source, retries, target_path, "warnings", warnings}, state)
+        File.write!(target_path, binary)
 
         # reload in memory
         :code.delete(module)
         :code.purge(module)
+        log("compile_erlang:purged", {source, retries, target_path}, state)
         {:module, module} = :code.load_binary(module, source, binary)
+        log("compile_erlang:loaded", {source, retries, target_path}, state)
         {module, binary}
 
-      _ ->
+      err ->
+        log("compile_erlang:not-ok", {source, retries, err}, state)
+
         cond do
           retries <= 10 ->
             sleep_time = retries * 100
             Process.sleep(sleep_time)
 
             # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
-            compile_erlang(source, retries + 1)
+            compile_erlang(source, state, retries + 1)
 
           true ->
             IO.puts("#############################################################################")
@@ -236,12 +305,6 @@ defmodule DevHelpers.Purserl do
             raise CompileError
         end
     end
-  end
-
-  def spawn_port(cmd) do
-    # cmd_str = "spago build --purs-args \"--codegen erl\" -v --no-psa"
-    port = Port.open({:spawn, cmd}, [:binary, {:env, env_variables()}])
-    port
   end
 
   def extract_purs_cmd(line) do
@@ -350,7 +413,7 @@ defmodule DevHelpers.Purserl do
       |> Enum.reverse()
 
     reverse_sorted_applications
-    |> Enum.map(fn x -> apply_suggestion(x) end)
+    |> Enum.map(fn x -> apply_suggestion(x, state) end)
 
     to_print =
       with_file_contents
@@ -404,7 +467,10 @@ defmodule DevHelpers.Purserl do
 
       chunk
       |> Enum.map(fn {_, text} -> text end)
-      |> Enum.map(&IO.puts/1)
+      |> Enum.map(fn chunk ->
+        log("print_err_warn_to_stdout", {chunk}, state)
+        IO.puts(chunk)
+      end)
 
       x
     end)
@@ -1237,18 +1303,21 @@ defmodule DevHelpers.Purserl do
     IO.inspect(msg, width: :infinity, printable_limit: :infinity, limit: :infinity)
   end
 
-  def apply_suggestion(%{
-        "filename" => filename,
-        "suggestion" => %{
-          "replaceRange" => %{
-            "startColumn" => start_column,
-            "startLine" => start_line,
-            "endColumn" => end_column,
-            "endLine" => end_line
-          },
-          "replacement" => replacement
-        }
-      }) do
+  def apply_suggestion(
+        %{
+          "filename" => filename,
+          "suggestion" => %{
+            "replaceRange" => %{
+              "startColumn" => start_column,
+              "startLine" => start_line,
+              "endColumn" => end_column,
+              "endLine" => end_line
+            },
+            "replacement" => replacement
+          }
+        } = inp,
+        state
+      ) do
     # NOTE[drathier]: we're reading the file contents back for each applied fix, so they all get applied. We could do them all in-memory, but this is easier to do. It's way past midnight.
     old_content = File.read!(filename)
 
@@ -1260,8 +1329,6 @@ defmodule DevHelpers.Purserl do
         :end_line => end_line,
         :end_column => end_column
       })
-
-    # IO.inspect({"applying suggestion", filename, replacement})
 
     # TODO[drathier]: why is there two trailing newlines in the suggested replacement?
     cleaned_replacement =
@@ -1275,16 +1342,12 @@ defmodule DevHelpers.Purserl do
         reg["suffix_columns"] <>
         reg["suffix_lines"]
 
-    # IO.puts("=== v pre")
-    # IO.puts(old_content)
-    # IO.puts("=== v post")
-    # IO.puts(new_content)
-    # IO.puts("=== end")
-
     if new_content != old_content do
+      log("apply_suggestion:applied", {inp}, state)
       :ok = File.write!(filename, new_content)
       :applied_suggestion
     else
+      log("apply_suggestion:noop", {inp}, state)
       :no_change
     end
   end
