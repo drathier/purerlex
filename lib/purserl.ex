@@ -30,7 +30,9 @@ defmodule DevHelpers.Purserl do
       port: nil,
       caller: nil,
       purs_cmd: nil,
-      purs_args: config |> Keyword.get(:purs_args, "")
+      purs_args: config |> Keyword.get(:purs_args, ""),
+      ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
+      ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).()
     }
 
     {:ok, state} = start_spago(state)
@@ -128,7 +130,7 @@ defmodule DevHelpers.Purserl do
         case Jason.decode(msg) do
           {:ok, v} ->
             # yes, now do stuff with it
-            process_warnings(v["warnings"], v["errors"])
+            process_warnings(state, v["warnings"], v["errors"])
 
             {:noreply, state}
 
@@ -215,17 +217,11 @@ defmodule DevHelpers.Purserl do
             compile_erlang(source, retries + 1)
 
           true ->
-            IO.puts(
-              "#############################################################################"
-            )
+            IO.puts("#############################################################################")
 
-            IO.puts(
-              "####### Erl compiler failed to run; something has gone terribly wrong #######"
-            )
+            IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
 
-            IO.puts(
-              "#############################################################################"
-            )
+            IO.puts("#############################################################################")
 
             raise CompileError
         end
@@ -246,7 +242,7 @@ defmodule DevHelpers.Purserl do
     {:ok, "purs compile " <> args}
   end
 
-  def process_warnings(warnings, errors) do
+  def process_warnings(state, warnings, errors) do
     # warnings = [
     #  %{
     #    "allSpans" => [
@@ -357,13 +353,13 @@ defmodule DevHelpers.Purserl do
             []
 
           :warn_fixable ->
-            [{x, format_warning_or_error(:warn_fixable, x)}]
+            [{x, format_warning_or_error(state, :warn_fixable, x)}]
 
           :warn_no_autofix ->
-            [{x, format_warning_or_error(:warn_no_autofix, x)}]
+            [{x, format_warning_or_error(state, :warn_no_autofix, x)}]
 
           :error ->
-            [{x, format_warning_or_error(:error, x)}]
+            [{x, format_warning_or_error(state, :error, x)}]
         end
       end)
 
@@ -410,6 +406,7 @@ defmodule DevHelpers.Purserl do
   end
 
   def format_warning_or_error(
+        state,
         kind,
         inp
       ) do
@@ -434,7 +431,7 @@ defmodule DevHelpers.Purserl do
           "endColumn" => _,
           "endLine" => _,
           "startColumn" => _,
-          "startLine" => _,
+          "startLine" => _
         },
         "suggestion" => _
       } ->
@@ -464,7 +461,7 @@ defmodule DevHelpers.Purserl do
                   ((snippet["prefix_lines"]
                     |> String.split("\n")
                     |> Enum.reverse()
-                    |> Enum.take(lines_of_context)
+                    |> Enum.take(state.ctx_lines_above)
                     |> Enum.reverse()
                     |> Enum.join("\n")) <>
                      snippet["prefix_columns"])
@@ -478,7 +475,7 @@ defmodule DevHelpers.Purserl do
                   (snippet["suffix_columns"] <>
                      (snippet["suffix_lines"]
                       |> String.split("\n")
-                      |> Enum.take(lines_of_context)
+                      |> Enum.take(state.ctx_lines_below)
                       |> Enum.join("\n")))
                   |> String.trim_trailing()
 
@@ -493,11 +490,7 @@ defmodule DevHelpers.Purserl do
                    |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
 
               _ ->
-                runtime_bug(
-                  {"###", "UNEXPECTED_SNIPPET_FORMAT",
-                   "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-                   kind, inp}
-                )
+                runtime_bug({"###", "UNEXPECTED_SNIPPET_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
 
                 ""
             end
@@ -515,11 +508,7 @@ defmodule DevHelpers.Purserl do
               Color.red() <> "Error" <> Color.reset()
 
             _ ->
-              runtime_bug(
-                {"###", "UNEXPECTED_ERROR_KIND",
-                 "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-                 kind, inp}
-              )
+              runtime_bug({"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
 
               ""
           end
@@ -533,11 +522,7 @@ defmodule DevHelpers.Purserl do
           "\n\n"
 
       _ ->
-        runtime_bug(
-          {"###", "UNEXPECTED_WARN_FORMAT",
-           "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-           kind, inp}
-        )
+        runtime_bug({"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
 
         ""
     end
@@ -581,6 +566,10 @@ defmodule DevHelpers.Purserl do
       end
     end)
     |> Enum.join("\n")
+  end
+
+  def syntax_highlight_indentex_lines(str, prefix) do
+    str
   end
 
   def syntax_highlight_indentex_lines(str, prefix) do
@@ -727,15 +716,13 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def parse_out_span(
-        %{
-          :file_contents_before => old_content,
-          :start_line => start_line,
-          :start_column => start_column,
-          :end_line => end_line,
-          :end_column => end_column
-        }
-      ) do
+  def parse_out_span(%{
+        :file_contents_before => old_content,
+        :start_line => start_line,
+        :start_column => start_column,
+        :end_line => end_line,
+        :end_column => end_column
+      }) do
     r_prefix_lines = "(?<prefix_lines>(([^\n]*\n){#{start_line - 1}}))"
     r_prefix_columns = "(?<prefix_columns>(.{#{start_column - 1}}))"
     r_infix_lines = "(?<infix_lines>(([^\n]*\n){#{end_line - start_line}}))"
@@ -761,7 +748,9 @@ defmodule DevHelpers.Purserl do
           "suffix_columns" => "",
           "suffix_lines" => ""
         }
-      v -> v
+
+      v ->
+        v
     end
   end
 
@@ -807,7 +796,7 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "UnusedDctorImport", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
-      %{ "errorCode" => "UnusedDctorExplicitImport", "suggestion" => %{"replacement" => replacement} } ->
+      %{"errorCode" => "UnusedDctorExplicitImport", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
       %{"errorCode" => "ImplicitQualifiedImport", "suggestion" => %{"replacement" => replacement}} ->
@@ -1228,11 +1217,7 @@ defmodule DevHelpers.Purserl do
 
       ###
       _ ->
-        runtime_bug(
-          {"###", "UNHANDLED_SUGGESTION_TAG",
-           "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-           x}
-        )
+        runtime_bug({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
 
         :warn_msg
     end
