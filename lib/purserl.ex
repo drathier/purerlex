@@ -35,6 +35,17 @@ defmodule DevHelpers.Purserl do
       ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).()
     }
 
+    # NOTE[drathier]: don't attempt this shit anymore. Just put in `erlc_paths: ["output"]` and live with it. It's incredibly hard to speed things up further. Whenever it starts recompiling 30+ files for no reason, nuke the entire _build folder and do a clean build.
+    # IO.inspect({:pre_mix_erlang})
+    # res = Mix.Tasks.Compile.Erlang.run([erlc_paths: ["output"]])
+    # IO.inspect({:done_mix_erlang, res})
+
+    # compile all erl files, so we can recover from aborted builds and so that this runs in CI
+    # files = Mix.Utils.extract_files(["output"], [:erl])
+    # IO.inspect({:start_prebuild_erlc, files})
+    # files |> Enum.map(fn x -> compile_erlang(x) end)
+    # IO.inspect({:done_prebuild_erlc, files})
+
     {:ok, state} = start_spago(state)
 
     {:ok, state}
@@ -203,6 +214,7 @@ defmodule DevHelpers.Purserl do
         File.write!(Path.join(Mix.Project.compile_path(), base <> ".beam"), binary)
 
         # reload in memory
+        :code.delete(module)
         :code.purge(module)
         {:module, module} = :code.load_binary(module, source, binary)
         {module, binary}
@@ -218,9 +230,7 @@ defmodule DevHelpers.Purserl do
 
           true ->
             IO.puts("#############################################################################")
-
             IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
-
             IO.puts("#############################################################################")
 
             raise CompileError
