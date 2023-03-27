@@ -279,8 +279,8 @@ defmodule DevHelpers.Purserl do
         File.write!(target_path, binary)
 
         # reload in memory
-        :code.delete(module)
         :code.purge(module)
+        :code.delete(module)
         log("compile_erlang:purged", {source, retries, target_path}, state)
         {:module, module} = :code.load_binary(module, source, binary)
         log("compile_erlang:loaded", {source, retries, target_path}, state)
