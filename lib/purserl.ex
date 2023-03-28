@@ -549,7 +549,7 @@ defmodule DevHelpers.Purserl do
                     |> Enum.reverse()
                     |> Enum.join("\n")) <>
                      snippet["prefix_columns"])
-                  |> String.trim_leading()
+                  |> String.trim_leading("\n")
 
                 snippet_actual =
                   snippet["infix_lines"] <>
@@ -563,11 +563,13 @@ defmodule DevHelpers.Purserl do
                       |> Enum.join("\n")))
                   |> String.trim_trailing()
 
+                common_prefix = get_common_line_prefix(snippet_context_pre <> snippet_actual <> snippet_context_post)
+
                 code_snippet_with_context =
-                  (snippet_context_pre |> prefix_all_lines(" ")) <>
+                  (snippet_context_pre |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" ")) <>
                     (Color.yellow() <>
-                       (snippet_actual |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
-                    (snippet_context_post |> prefix_all_lines(" "))
+                       (snippet_actual |> strip_prefix_all_lines(common_prefix) |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
+                    (snippet_context_post |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" "))
 
                 ("  " <> format_path_with_line(filename, start_line) <> "\n") <>
                   (code_snippet_with_context
@@ -612,6 +614,29 @@ defmodule DevHelpers.Purserl do
     end
   end
 
+  def get_common_line_prefix(things) when is_binary(things) do
+    get_common_line_prefix(things |> String.split("\n"))
+  end
+
+  def get_common_line_prefix(things, count \\ 1) when is_list(things) do
+    IO.inspect({:get_common_line_prefix, things, count})
+
+    prefixes =
+      things
+      |> Enum.map(fn s -> String.slice(s, 0, count) end)
+      # only looking at spaces here, to avoid dropping useful code
+      |> Enum.filter(fn x -> String.trim_leading(x, " ") == "" end)
+      |> IO.inspect()
+      |> length()
+
+    case prefixes == length(things) do
+      true -> get_common_line_prefix(things, count + 1)
+      false ->
+        [thing|_] = things
+        String.slice(thing, 0, count-1)
+    end
+  end
+
   def format_path_with_line(path, line) do
     Color.magenta() <>
       if line do
@@ -635,6 +660,13 @@ defmodule DevHelpers.Purserl do
     |> String.split("\n")
     |> Enum.map(fn x -> prefix <> x end)
     |> Enum.join("\n")
+  end
+
+  def strip_prefix_all_lines(str, unwanted_prefix) do
+    IO.inspect {:strip_prefix_all_lines, str, unwanted_prefix}
+    ("\n" <> str)
+    |> String.replace("\n" <> unwanted_prefix, "\n")
+    |> String.slice(1..-1//1)
   end
 
   def add_prefix_if_missing(str, prefix) do
@@ -821,6 +853,8 @@ defmodule DevHelpers.Purserl do
         r_infix_columns <>
         r_suffix_columns <>
         r_suffix_lines
+
+    IO.inspect(r)
 
     case Regex.named_captures(Regex.compile!(r), old_content) do
       nil ->
