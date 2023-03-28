@@ -40,7 +40,15 @@ defmodule DevHelpers.Purserl do
             nil
 
           path ->
-            File.open!(path, [:utf8, :append])
+            case File.open(path, [:utf8, :append]) do
+              {:ok, file} ->
+                file
+
+              err ->
+                IO.inspect({"purerlex: failed to open file, disabling debug logging", {:logfile_path, path}, {:err, err}})
+                nil
+            end
+
             # path -> File.open!(path, [:utf8, :append, :compressed])
         end
     }
