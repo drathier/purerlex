@@ -45,7 +45,7 @@ defmodule DevHelpers.Purserl do
                 file
 
               err ->
-                IO.inspect({"purerlex: failed to open file, disabling debug logging", {:logfile_path, path}, {:err, err}})
+                runtime_bug({"purerlex: failed to open file, disabling debug logging", {:logfile_path, path}, {:err, err}})
                 nil
             end
 
@@ -619,14 +619,11 @@ defmodule DevHelpers.Purserl do
   end
 
   def get_common_line_prefix(things, count \\ 1) when is_list(things) do
-    IO.inspect({:get_common_line_prefix, things, count})
-
     prefixes =
       things
       |> Enum.map(fn s -> String.slice(s, 0, count) end)
       # only looking at spaces here, to avoid dropping useful code
       |> Enum.filter(fn x -> String.trim_leading(x, " ") == "" end)
-      |> IO.inspect()
       |> length()
 
     case prefixes == length(things) do
@@ -663,7 +660,6 @@ defmodule DevHelpers.Purserl do
   end
 
   def strip_prefix_all_lines(str, unwanted_prefix) do
-    IO.inspect {:strip_prefix_all_lines, str, unwanted_prefix}
     ("\n" <> str)
     |> String.replace("\n" <> unwanted_prefix, "\n")
     |> String.slice(1..-1//1)
@@ -853,8 +849,6 @@ defmodule DevHelpers.Purserl do
         r_infix_columns <>
         r_suffix_columns <>
         r_suffix_lines
-
-    IO.inspect(r)
 
     case Regex.named_captures(Regex.compile!(r), old_content) do
       nil ->
