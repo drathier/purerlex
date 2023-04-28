@@ -627,10 +627,12 @@ defmodule DevHelpers.Purserl do
       |> length()
 
     case prefixes == length(things) do
-      true -> get_common_line_prefix(things, count + 1)
+      true ->
+        get_common_line_prefix(things, count + 1)
+
       false ->
-        [thing|_] = things
-        String.slice(thing, 0, count-1)
+        [thing | _] = things
+        String.slice(thing, 0, count - 1)
     end
   end
 
