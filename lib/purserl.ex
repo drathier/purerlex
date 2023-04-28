@@ -399,8 +399,12 @@ defmodule DevHelpers.Purserl do
       |> Enum.map(fn x -> Map.put(x, :file_contents_before, file_contents_map[x["filename"]]) end)
 
     should_be_fixed_automatically =
-      with_file_contents
-      |> Enum.filter(&can_be_fixed_automatically?/1)
+      if Enum.member?(["", "0", "false"], System.get_env("PURERLEX_FIX", "")) do
+        []
+      else
+        with_file_contents
+        |> Enum.filter(&can_be_fixed_automatically?/1)
+      end
 
     reverse_sorted_applications =
       should_be_fixed_automatically
@@ -583,7 +587,11 @@ defmodule DevHelpers.Purserl do
         tag =
           case kind do
             :warn_fixable ->
-              Color.green() <> "Fixed" <> Color.reset()
+              if Enum.member?(["", "0", "false"], System.get_env("PURERLEX_FIX", "")) do
+                Color.yellow() <> "Fixable" <> Color.reset()
+              else
+                Color.green() <> "Fixed" <> Color.reset()
+              end
 
             :warn_no_autofix ->
               Color.yellow() <> "Warning" <> Color.reset()
