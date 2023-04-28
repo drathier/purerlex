@@ -398,8 +398,6 @@ defmodule DevHelpers.Purserl do
       not_in_spago
       |> Enum.map(fn x -> Map.put(x, :file_contents_before, file_contents_map[x["filename"]]) end)
 
-    file_contents_map = nil
-
     should_be_fixed_automatically =
       with_file_contents
       |> Enum.filter(&can_be_fixed_automatically?/1)
