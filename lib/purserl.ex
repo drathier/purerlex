@@ -398,11 +398,13 @@ defmodule DevHelpers.Purserl do
       not_in_spago
       |> Enum.map(fn x -> Map.put(x, :file_contents_before, file_contents_map[x["filename"]]) end)
 
-    file_contents_map = nil
-
     should_be_fixed_automatically =
-      with_file_contents
-      |> Enum.filter(&can_be_fixed_automatically?/1)
+      if Enum.member?(["", "0", "false"], System.get_env("PURERLEX_FIX", "")) do
+        []
+      else
+        with_file_contents
+        |> Enum.filter(&can_be_fixed_automatically?/1)
+      end
 
     reverse_sorted_applications =
       should_be_fixed_automatically
@@ -521,7 +523,10 @@ defmodule DevHelpers.Purserl do
       } ->
         modu = Color.magenta() <> (module_name || filename) <> Color.reset()
 
-        lines_of_context = 5
+        max_lines_of_context =
+          System.get_env("PURERLEX_MAX_LINES_OF_CONTEXT", "3")
+          |> String.trim_trailing()
+          |> String.to_integer()
 
         snippets =
           all_spans
@@ -566,10 +571,11 @@ defmodule DevHelpers.Purserl do
                 common_prefix = get_common_line_prefix(snippet_context_pre <> snippet_actual <> snippet_context_post)
 
                 code_snippet_with_context =
-                  (snippet_context_pre |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" ")) <>
+                  ((snippet_context_pre |> take_lines(-Integer.floor_div(max_lines_of_context, 2)) |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" ")) <>
                     (Color.yellow() <>
                        (snippet_actual |> strip_prefix_all_lines(common_prefix) |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
-                    (snippet_context_post |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" "))
+                    (snippet_context_post |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" ") )
+                  ) |> take_lines(max_lines_of_context)
 
                 ("  " <> format_path_with_line(filename, start_line) <> "\n") <>
                   (code_snippet_with_context
@@ -585,7 +591,11 @@ defmodule DevHelpers.Purserl do
         tag =
           case kind do
             :warn_fixable ->
-              Color.green() <> "Fixed" <> Color.reset()
+              if Enum.member?(["", "0", "false"], System.get_env("PURERLEX_FIX", "")) do
+                Color.yellow() <> "Fixable" <> Color.reset()
+              else
+                Color.green() <> "Fixed" <> Color.reset()
+              end
 
             :warn_no_autofix ->
               Color.yellow() <> "Warning" <> Color.reset()
@@ -601,11 +611,9 @@ defmodule DevHelpers.Purserl do
 
         (Color.cyan() <>
            error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
-          "\n" <>
-          ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
-             "\n") <>
-          Enum.join(snippets, "\n\n") <>
-          "\n\n"
+          "\n" <> Enum.join(snippets, "\n") <> "\n\n"
+          <> ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
+             "\n")
 
       _ ->
         runtime_bug({"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
@@ -627,10 +635,12 @@ defmodule DevHelpers.Purserl do
       |> length()
 
     case prefixes == length(things) do
-      true -> get_common_line_prefix(things, count + 1)
+      true ->
+        get_common_line_prefix(things, count + 1)
+
       false ->
-        [thing|_] = things
-        String.slice(thing, 0, count-1)
+        [thing | _] = things
+        String.slice(thing, 0, count - 1)
     end
   end
 
@@ -650,6 +660,13 @@ defmodule DevHelpers.Purserl do
     |> Enum.map(fn x -> prefix <> x end)
     |> Enum.join("\n")
     |> String.replace_prefix(prefix, "")
+  end
+
+  def take_lines(str, lines) do
+    str
+    |> String.split("\n")
+    |> Enum.take(lines)
+    |> Enum.join("\n")
   end
 
   def prefix_all_lines(str, prefix) do
