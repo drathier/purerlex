@@ -362,6 +362,7 @@ defmodule DevHelpers.Purserl do
       |> Enum.filter(fn x ->
         case x do
           %{"filename" => ".spago/" <> _} -> false
+          %{"filename" => nil} -> false
           _ -> true
         end
       end)
