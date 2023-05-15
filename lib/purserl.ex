@@ -2,6 +2,12 @@ defmodule DevHelpers.Purserl do
   use GenServer
   alias IO.ANSI, as: Color
 
+  """
+  x = {"2023-05-15T13:12:07.843447Z", "handle_info", "{\"warnings .... # i.e. whole log handle_info line
+  {_, _, inp} = x
+  Process.send(:purserl_compiler, {42, {:data, {:eol, inp}}}, [])
+  """
+
   ###
 
   def start_link(config) do
@@ -362,8 +368,26 @@ defmodule DevHelpers.Purserl do
       |> Enum.filter(fn x ->
         case x do
           %{"filename" => ".spago/" <> _} -> false
+          # [fh]: we sometimes get null filenames from compiler; whyyyy?
           %{"filename" => nil} -> false
           _ -> true
+        end
+      end)
+      |> Enum.map(fn x ->
+        case x do
+          %{
+            "filename" => filename,
+            "position" => nil
+          } ->
+            Map.put(x, "position", %{
+              "startColumn" => 0,
+              "startLine" => 0,
+              "endColumn" => 0,
+              "endLine" => 0
+            })
+
+          _ ->
+            x
         end
       end)
       |> Enum.sort_by(fn x ->
