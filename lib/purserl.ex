@@ -175,10 +175,12 @@ defmodule DevHelpers.Purserl do
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 0") ->
+            # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
             GenServer.reply(state.caller, :ok)
             {:noreply, %{state | caller: nil}}
 
           msg |> String.starts_with?("### done compiler: 1") ->
+            # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
             GenServer.reply(state.caller, :err)
             {:noreply, %{state | caller: nil}}
 
@@ -243,6 +245,7 @@ defmodule DevHelpers.Purserl do
 
   def handle_call(:recompile, from, state) do
     _ = port_command(state.port, 'sdf\n', [], state)
+    # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_triggered})
     {:noreply, %{state | caller: from}}
   end
 
@@ -597,10 +600,10 @@ defmodule DevHelpers.Purserl do
 
                 code_snippet_with_context =
                   ((snippet_context_pre |> take_lines(-Integer.floor_div(max_lines_of_context, 2)) |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" ")) <>
-                    (Color.yellow() <>
-                       (snippet_actual |> strip_prefix_all_lines(common_prefix) |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
-                    (snippet_context_post |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" ") )
-                  ) |> take_lines(max_lines_of_context)
+                     (Color.yellow() <>
+                        (snippet_actual |> strip_prefix_all_lines(common_prefix) |> prefix_lines_skipping_first(" ")) <> Color.reset()) <>
+                     (snippet_context_post |> strip_prefix_all_lines(common_prefix) |> prefix_all_lines(" ")))
+                  |> take_lines(max_lines_of_context)
 
                 ("  " <> format_path_with_line(filename, start_line) <> "\n") <>
                   (code_snippet_with_context
@@ -636,9 +639,11 @@ defmodule DevHelpers.Purserl do
 
         (Color.cyan() <>
            error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
-          "\n" <> Enum.join(snippets, "\n") <> "\n\n"
-          <> ((message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
-             "\n")
+          "\n" <>
+          Enum.join(snippets, "\n") <>
+          "\n\n" <>
+          (message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
+          "\n"
 
       _ ->
         runtime_bug({"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
@@ -968,8 +973,12 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "WarningParsingModule", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
 
+      # suggestion is not always present for some reason
       %{"errorCode" => "UnusedTypeVar", "suggestion" => %{"replacement" => replacement}} ->
         :warn_fixable
+
+      %{"errorCode" => "UnusedTypeVar"} ->
+        :warn_no_autofix
 
       %{"errorCode" => "UserDefinedWarning"} ->
         :warn_no_autofix
