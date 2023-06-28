@@ -329,7 +329,8 @@ defmodule DevHelpers.Purserl do
 
     [_debug, args_with_end] = line |> String.split(split_str, parts: 2)
     [args, _end] = args_with_end |> String.split("`", parts: 2)
-    {:ok, "purs compile " <> args}
+    # [drathier]: trim_leading to allow easier searching in logfiles
+    {:ok, "purs compile " <> String.trim_leading(args, " ")}
   end
 
   def process_warnings(state, warnings, errors) do
