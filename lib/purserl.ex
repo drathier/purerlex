@@ -142,7 +142,7 @@ defmodule DevHelpers.Purserl do
       f ->
         contents = {DateTime.utc_now() |> DateTime.to_iso8601(), tag, msg}
         contents_str = inspect(contents, width: :infinity, printable_limit: :infinity, limit: :infinity)
-        IO.puts(f, contents_str)
+        ioputs(f, contents_str)
     end
 
     nil
@@ -219,12 +219,12 @@ defmodule DevHelpers.Purserl do
             cond do
               msg |> String.contains?(" Compiling ") ->
                 # NOTE[drathier]: this eats the last line before this runs, which is either the warning that there were no source files found using some pattern, or the line that says that the app finished building. Not worth fixing, but printing a newline first if it contains `[1 of` is the easy fix, so we have a line to demolish.
-                IO.puts(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
+                ioputs(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
                 {:noreply, state}
 
               true ->
                 # nope, print it
-                IO.puts(msg)
+                ioputs(msg)
                 {:noreply, state}
             end
         end
@@ -233,8 +233,13 @@ defmodule DevHelpers.Purserl do
 
   def handle_info({_port, {:exit_status, exit_status}}, state) do
     msg = "Purs exited unexpectedly with code #{exit_status}"
-    IO.puts(msg)
+    ioputs(msg)
     {:stop, msg, state}
+  end
+
+  def handle_info(msg, state) do
+    ioputs("handle_info unhandled pattern (msg:#{msg}) (state:#{state})")
+    {:noreply, state}
   end
 
   @impl true
@@ -315,9 +320,9 @@ defmodule DevHelpers.Purserl do
             compile_erlang(source, state, retries + 1)
 
           true ->
-            IO.puts("#############################################################################")
-            IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
-            IO.puts("#############################################################################")
+            ioputs("#############################################################################")
+            ioputs("####### Erl compiler failed to run; something has gone terribly wrong #######")
+            ioputs("#############################################################################")
 
             raise CompileError
         end
@@ -502,13 +507,13 @@ defmodule DevHelpers.Purserl do
         true ->
           ""
       end
-      |> IO.puts()
+      |> ioputs()
 
       chunk
       |> Enum.map(fn {_, text} -> text end)
       |> Enum.map(fn chunk ->
         log("print_err_warn_to_stdout", {chunk}, state)
-        IO.puts(chunk)
+        ioputs(chunk)
       end)
 
       x
@@ -898,7 +903,7 @@ defmodule DevHelpers.Purserl do
         r_suffix_columns <>
         r_suffix_lines
 
-    case Regex.named_captures(Regex.compile!(r), old_content) do
+    case Regex.named_captures(Regex.compile!(r, [:unicode]), old_content) do
       nil ->
         %{
           "prefix_lines" => "",
@@ -1437,6 +1442,19 @@ defmodule DevHelpers.Purserl do
     else
       log("apply_suggestion:noop", {inp}, state)
       :no_change
+    end
+  end
+
+  defp ioputs(device \\ :stdio, item) do
+    try do
+      IO.puts(device, item)
+    rescue
+      reason in ArgumentError ->
+        throw(inspect({:ioputs_catch, ArgumentError, reason, device, item}, printable_limit: :infinity, width: :infinity, limit: :infinity))
+    catch
+      :exit, reason ->
+        nil
+        throw(inspect({:ioputs_catch, reason, device, item}, printable_limit: :infinity, width: :infinity, limit: :infinity))
     end
   end
 end
