@@ -1058,7 +1058,7 @@ defmodule DevHelpers.Purserl do
         :ignore
 
       %{"errorCode" => "AdditionalProperty"} ->
-        :warn_no_autofix
+        :error
 
       %{"errorCode" => "AmbiguousTypeVariables"} ->
         :warn_no_autofix
