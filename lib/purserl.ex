@@ -222,6 +222,10 @@ defmodule DevHelpers.Purserl do
                 ioputs(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
                 {:noreply, state}
 
+              # nope, is it "purs compile: No files found using pattern: src/**/*.purs"?
+              msg |> String.contains?("No files found using pattern: src/**/*.purs") ->
+                {:noreply, state}
+
               true ->
                 # nope, print it
                 ioputs(msg)
