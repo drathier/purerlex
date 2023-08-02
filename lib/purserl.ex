@@ -222,6 +222,10 @@ defmodule DevHelpers.Purserl do
                 ioputs(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
                 {:noreply, state}
 
+              # nope, is it "purs compile: No files found using pattern: src/**/*.purs"?
+              msg |> String.contains?("No files found using pattern: src/**/*.purs") ->
+                {:noreply, state}
+
               true ->
                 # nope, print it
                 ioputs(msg)
@@ -659,7 +663,11 @@ defmodule DevHelpers.Purserl do
   end
 
   def get_common_line_prefix(things) when is_binary(things) do
-    get_common_line_prefix(things |> String.split("\n"))
+    if things == "" do
+      ""
+    else
+      get_common_line_prefix(things |> String.split("\n"))
+    end
   end
 
   def get_common_line_prefix(things, count \\ 1) when is_list(things) do
