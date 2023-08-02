@@ -659,7 +659,11 @@ defmodule DevHelpers.Purserl do
   end
 
   def get_common_line_prefix(things) when is_binary(things) do
-    get_common_line_prefix(things |> String.split("\n"))
+    if things == "" do
+      ""
+    else
+      get_common_line_prefix(things |> String.split("\n"))
+    end
   end
 
   def get_common_line_prefix(things, count \\ 1) when is_list(things) do
