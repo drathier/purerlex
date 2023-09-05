@@ -9,8 +9,15 @@ defmodule Mix.Tasks.Compile.Purserl do
 
   @impl Mix.Task.Compiler
   def run(_argv) do
+    #IO.inspect({"###Mix.Task.Compiler (purserl)", "run", "argv", _argv})
     config = Mix.Project.config() |> Keyword.get(:purserl, Keyword.new())
-    {:ok, pid} = P.start_link(config)
-    P.trigger_recompile(pid)
+    #IO.inspect({"###Mix.Task.Compiler (purserl)", "config", config})
+    {:ok, pid} = P.start(config)
+    #IO.inspect({"###Mix.Task.Compiler (purserl)", "pid", pid})
+    res = P.trigger_recompile(pid)
+    #IO.inspect({"###Mix.Task.Compiler (purserl)", "res", res})
+    #P.trigger_exit(pid)
+    #IO.inspect({"###Mix.Task.Compiler (purserl)", "shut-down", res})
+    res
   end
 end

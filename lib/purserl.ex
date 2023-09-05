@@ -2,16 +2,16 @@ defmodule DevHelpers.Purserl do
   use GenServer
   alias IO.ANSI, as: Color
 
-  """
-  x = {"2023-05-15T13:12:07.843447Z", "handle_info", "{\"warnings .... # i.e. whole log handle_info line
-  {_, _, inp} = x
-  Process.send(:purserl_compiler, {42, {:data, {:eol, inp}}}, [])
-  """
+  # """
+  # x = {"2023-05-15T13:12:07.843447Z", "handle_info", "{\"warnings .... # i.e. whole log handle_info line
+  # {_, _, inp} = x
+  # Process.send(:purserl_compiler, {42, {:data, {:eol, inp}}}, [])
+  # """
 
   ###
 
-  def start_link(config) do
-    case GenServer.start_link(__MODULE__, config, name: :purserl_compiler) do
+  def start(config) do
+    case GenServer.start(__MODULE__, config, name: :purserl_compiler) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       res -> res
@@ -34,7 +34,7 @@ defmodule DevHelpers.Purserl do
 
     state = %{
       port: nil,
-      caller: nil,
+      caller: [],
       purs_cmd: nil,
       purs_args: config |> Keyword.get(:purs_args, ""),
       ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
@@ -140,7 +140,7 @@ defmodule DevHelpers.Purserl do
         nil
 
       f ->
-        contents = {DateTime.utc_now() |> DateTime.to_iso8601(), tag, msg}
+        contents = {self(), DateTime.utc_now() |> DateTime.to_iso8601(), tag, msg}
         contents_str = inspect(contents, width: :infinity, printable_limit: :infinity, limit: :infinity)
         ioputs(f, contents_str)
     end
@@ -176,13 +176,11 @@ defmodule DevHelpers.Purserl do
 
           msg |> String.starts_with?("### done compiler: 0") ->
             # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
-            GenServer.reply(state.caller, :ok)
-            {:noreply, %{state | caller: nil}}
+            reply(state, state.caller, :ok)
 
           msg |> String.starts_with?("### done compiler: 1") ->
             # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
-            GenServer.reply(state.caller, :err)
-            {:noreply, %{state | caller: nil}}
+            reply(state, state.caller, :err)
 
           msg |> String.starts_with?("### erl-same:") ->
             {:noreply, state}
@@ -249,13 +247,19 @@ defmodule DevHelpers.Purserl do
   @impl true
   def handle_call(:shutdown_compiler, _from, state) do
     port_close(state.port, state)
-    {:stop, "was told to stop", state}
+    {:stop, :normal, state}
   end
 
   def handle_call(:recompile, from, state) do
-    _ = port_command(state.port, 'sdf\n', [], state)
-    # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_triggered})
-    {:noreply, %{state | caller: from}}
+    # NOTE[drathier]: elixir usually only runs one compiler pass at a time, but there are a few (probably unintentional) exceptions which cause total havoc. This case is a workaround for that.
+    case state.caller do
+      [] ->
+        _ = port_command(state.port, 'sdf\n', [], state)
+      _ ->
+        #ioputs(inspect({"[purerlex]: skipping duplicate concurrent recompile", from, state.caller}, width: 2000))
+        :already_running
+    end
+    {:noreply, %{state | caller: [from|state.caller]}}
   end
 
   ###
@@ -389,7 +393,7 @@ defmodule DevHelpers.Purserl do
       |> Enum.map(fn x ->
         case x do
           %{
-            "filename" => filename,
+            "filename" => _filename,
             "position" => nil
           } ->
             Map.put(x, "position", %{
@@ -741,11 +745,11 @@ defmodule DevHelpers.Purserl do
     |> Enum.join("\n")
   end
 
-  def syntax_highlight_indentex_lines(str, prefix) do
+  def syntax_highlight_indentex_lines(str, _prefix) do
     str
   end
 
-  def syntax_highlight_indentex_lines(str, prefix) do
+  def syntax_highlight_indentex_lines2(str, prefix) do
     str
     |> String.split("\n")
     |> Enum.map(fn x ->
@@ -957,38 +961,38 @@ defmodule DevHelpers.Purserl do
     # :error
     case x do
       # warn fixable
-      %{"errorCode" => "UnusedImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "UnusedImport", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "DuplicateImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "DuplicateImport", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "UnusedExplicitImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "UnusedExplicitImport", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "UnusedDctorImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "UnusedDctorImport", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "UnusedDctorExplicitImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "UnusedDctorExplicitImport", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "ImplicitQualifiedImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "ImplicitQualifiedImport", "suggestion" => %{"replacement" => _replacement}} ->
         :ignore
 
-      %{"errorCode" => "HidingImport", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "HidingImport", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "MissingTypeDeclaration", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "MissingTypeDeclaration", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "MissingKindDeclaration", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "MissingKindDeclaration", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
-      %{"errorCode" => "WarningParsingModule", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "WarningParsingModule", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
       # suggestion is not always present for some reason
-      %{"errorCode" => "UnusedTypeVar", "suggestion" => %{"replacement" => replacement}} ->
+      %{"errorCode" => "UnusedTypeVar", "suggestion" => %{"replacement" => _replacement}} ->
         :warn_fixable
 
       %{"errorCode" => "UnusedTypeVar"} ->
@@ -1150,7 +1154,7 @@ defmodule DevHelpers.Purserl do
         :error
 
       %{"errorCode" => "DuplicateSelectiveImport"} ->
-        :error
+        :warning
 
       %{"errorCode" => "DuplicateTypeArgument"} ->
         :error
@@ -1454,15 +1458,24 @@ defmodule DevHelpers.Purserl do
   end
 
   defp ioputs(device \\ :stdio, item) do
-    try do
-      IO.puts(device, item)
-    rescue
-      reason in ArgumentError ->
-        throw(inspect({:ioputs_catch, ArgumentError, reason, device, item}, printable_limit: :infinity, width: :infinity, limit: :infinity))
-    catch
-      :exit, reason ->
-        nil
-        throw(inspect({:ioputs_catch, reason, device, item}, printable_limit: :infinity, width: :infinity, limit: :infinity))
-    end
+    IO.puts(device, item)
+  end
+
+  defp reply(state, caller, response) do
+    caller |> Enum.map(fn c -> GenServer.reply(c, response) end)
+    {:noreply, %{state | caller: []}}
+
+    #try do
+    #  GenServer.reply(caller, response)
+    #  {:noreply, %{state | caller: nil}}
+    #rescue
+    #  reason in FunctionClauseError ->
+    #    case reason do
+    #      %FunctionClauseError{module: :gen, function: :reply, arity: 2, kind: nil, args: nil, clauses: nil} ->
+    #        {:noreply, %{state | caller: nil}}
+    #      _ ->
+    #        throw(inspect({:genserver_reply_catch_bad_FunctionClauseError, FunctionClauseError, reason, caller, response}, printable_limit: :infinity, width: :infinity, limit: :infinity))
+    #    end
+    #end
   end
 end

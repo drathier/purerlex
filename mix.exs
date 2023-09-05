@@ -4,7 +4,7 @@ defmodule Purerlex.MixProject do
   def project do
     [
       app: :purerlex,
-      version: "0.9.0",
+      version: "0.11.0",
       elixir: "~> 1.11",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -32,7 +32,8 @@ defmodule Purerlex.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:ex_doc, "~> 0.24", only: :dev}
+      {:ex_doc, "~> 0.24", only: :dev},
+      {:jason, "~> 1.0"}
     ]
   end
 
