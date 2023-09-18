@@ -1351,6 +1351,9 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "TypesDoNotUnify"} ->
         :error
 
+      %{"errorCode" => "TypeRowsDoNotUnify"} ->
+        :error
+
       %{"errorCode" => "UndefinedTypeVariable"} ->
         :error
 
