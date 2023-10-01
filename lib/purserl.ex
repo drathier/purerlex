@@ -1154,7 +1154,7 @@ defmodule DevHelpers.Purserl do
         :error
 
       %{"errorCode" => "DuplicateSelectiveImport"} ->
-        :warning
+        :warn_no_autofix
 
       %{"errorCode" => "DuplicateTypeArgument"} ->
         :error
