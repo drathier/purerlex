@@ -169,6 +169,7 @@ defmodule DevHelpers.Purserl do
       msg |> String.starts_with?("###") ->
         cond do
           msg == "### launching compiler" ->
+            IO.puts("Compiling ...")
             {:noreply, state}
 
           msg == "### read externs" ->
@@ -216,7 +217,7 @@ defmodule DevHelpers.Purserl do
             # nope, is it a "[123 of 456] Compiling ..." line?
             cond do
               msg |> String.contains?(" Compiling ") ->
-                # NOTE[drathier]: this eats the last line before this runs, which is either the warning that there were no source files found using some pattern, or the line that says that the app finished building. Not worth fixing, but printing a newline first if it contains `[1 of` is the easy fix, so we have a line to demolish.
+                # NOTE[drathier]: this eats the last line before this runs. We're printing the "Compiling ..." message when the compiler launches explicitly so that this line has something to eat. Erlang compiler warnings are sometimes eaten by this too, so it's not a perfect solution.
                 ioputs(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
                 {:noreply, state}
 
