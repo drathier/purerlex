@@ -1176,7 +1176,7 @@ defmodule DevHelpers.Purserl do
         :error
 
       %{"errorCode" => "AmbiguousTypeVariables"} ->
-        :warn_no_autofix
+        :error
 
       %{"errorCode" => "ArgListLengthsDiffer"} ->
         :error
