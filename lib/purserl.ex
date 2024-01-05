@@ -429,7 +429,8 @@ defmodule DevHelpers.Purserl do
       |> Enum.dedup()
       |> List.foldl(%{}, fn filename, acc ->
         case Map.get(acc, filename) do
-          nil ->
+          nil when filename != "" ->
+            IO.puts("filename: \"" <> filename <> "\"")
             Map.put(acc, filename, File.read!(filename))
 
           _ ->
@@ -894,6 +895,16 @@ defmodule DevHelpers.Purserl do
     end
   end
 
+  def parse_out_span(%{ :file_contents_before => old_content }) when old_content == nil do
+    %{
+      "prefix_lines" => "",
+      "prefix_columns" => "",
+      "infix_lines" => "Failed to parse out error snippet",
+      "infix_columns" => "",
+      "suffix_columns" => "",
+      "suffix_lines" => ""
+    }
+  end
   def parse_out_span(%{
         :file_contents_before => old_content,
         :start_line => start_line,
@@ -1412,6 +1423,9 @@ defmodule DevHelpers.Purserl do
     IO.inspect(msg, width: :infinity, printable_limit: :infinity, limit: :infinity)
   end
 
+  def apply_suggestion( %{ "filename" => filename } = inp, state) when filename == "" do
+    :no_change
+  end
   def apply_suggestion(
         %{
           "filename" => filename,
