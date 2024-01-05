@@ -1442,7 +1442,6 @@ defmodule DevHelpers.Purserl do
         state
       ) do
     # NOTE[drathier]: we're reading the file contents back for each applied fix, so they all get applied. We could do them all in-memory, but this is easier to do. It's way past midnight.
-    IO.inspect(filename)
     old_content = File.read!(filename)
 
     reg =
