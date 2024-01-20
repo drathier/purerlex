@@ -46,20 +46,21 @@ defmodule DevHelpers.Purserl do
             nil
 
           path ->
-            case File.open(path, [:utf8, :append]) do
-              {:ok, file} ->
-                file
-
+            dirpath = path |> String.reverse() |> String.split("/", parts: 2) |> Enum.reverse() |> List.first("") |> String.reverse()
+            with :ok <- File.mkdir_p(dirpath),
+                 {:ok, file} <- File.open(path, [:utf8, :append])
+            do
+              file
+            else
               err ->
-                runtime_bug({"purerlex: failed to open file, disabling debug logging", {:logfile_path, path}, {:err, err}})
+                runtime_bug(nil, {"purerlex: failed to create folders or open file, disabling debug logging", {:logfile_path, path}, {:err, err}})
                 nil
             end
-
-            # path -> File.open!(path, [:utf8, :append, :compressed])
-        end
+        end,
+      build_error_cache: config |> Keyword.get(:build_error_cache, nil)
     }
 
-    log("init", {config, System.get_env()}, state)
+    log("init", {config, System.get_env()}, state.logfile)
 
     # NOTE[drathier]: don't attempt this shit anymore. Just put in `erlc_paths: ["output"]` and live with it. It's incredibly hard to speed things up further. Whenever it starts recompiling 30+ files for no reason, nuke the entire _build folder and do a clean build.
     # IO.inspect({:pre_mix_erlang})
@@ -120,22 +121,22 @@ defmodule DevHelpers.Purserl do
 
   # logging wrappers
   def port_open(arg, opts, state) do
-    log("port_open", {arg, opts}, state)
+    log("port_open", {arg, opts}, state.logfile)
     Port.open(arg, opts)
   end
 
   def port_command(port, msg, opts, state) do
-    log("port_command", {port, msg, opts}, state)
+    log("port_command", {port, msg, opts}, state.logfile)
     Port.command(port, msg, opts)
   end
 
   def port_close(port, state) do
-    log("port_close", {port}, state)
+    log("port_close", {port}, state.logfile)
     Port.close(port)
   end
 
-  def log(tag, msg, state) do
-    case state.logfile do
+  def log(tag, msg, logfile) do
+    case logfile do
       nil ->
         nil
 
@@ -151,7 +152,7 @@ defmodule DevHelpers.Purserl do
   @impl true
   def handle_info({_port, {:data, {:eol, msg}}}, state) do
     # log whenever we get something, if applicable
-    log("handle_info", msg, state)
+    log("handle_info", msg, state.logfile)
 
     cond do
       # spago
@@ -177,10 +178,12 @@ defmodule DevHelpers.Purserl do
 
           msg |> String.starts_with?("### done compiler: 0") ->
             # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
+            process_warnings(state)
             reply(state, state.caller, :ok)
 
           msg |> String.starts_with?("### done compiler: 1") ->
             # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
+            process_warnings(state)
             reply(state, state.caller, :err)
 
           msg |> String.starts_with?("### erl-same:") ->
@@ -209,7 +212,7 @@ defmodule DevHelpers.Purserl do
         case Jason.decode(msg) do
           {:ok, v} ->
             # yes, now do stuff with it
-            process_warnings(state, v["warnings"], v["errors"])
+            process_warnings(state, v["warnings"], v["errors"], :wip)
 
             {:noreply, state}
 
@@ -219,6 +222,15 @@ defmodule DevHelpers.Purserl do
               msg |> String.contains?(" Compiling ") ->
                 # NOTE[drathier]: this eats the last line before this runs. We're printing the "Compiling ..." message when the compiler launches explicitly so that this line has something to eat. Erlang compiler warnings are sometimes eaten by this too, so it's not a perfect solution.
                 ioputs(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
+                #ioputs("\n" <> msg)
+
+                # [ 848 of 1058] Compiling S64 Lesslie.Fortnox.Streams.Storage
+                [_, a] = msg |> String.split(" Compiling ", parts: 2)
+                [_s_version, module] = a |> String.split(" ", parts: 2)
+                #IO.inspect {:s_version, s_version, :module, module}
+
+                del_cache(state.logfile, state.build_error_cache, module)
+
                 {:noreply, state}
 
               # nope, is it "purs compile: No files found using pattern: src/**/*.purs"?
@@ -298,7 +310,7 @@ defmodule DevHelpers.Purserl do
 
   # Compiles and loads an Erlang source file, returns {module, binary}
   defp compile_erlang(source, state, retries \\ 0) do
-    log("compile_erlang", {source, retries}, state)
+    log("compile_erlang", {source, retries}, state.logfile)
     source = Path.relative_to_cwd(source) |> String.to_charlist()
 
     case :compile.file(source, [:binary, :return_warnings]) do
@@ -306,19 +318,19 @@ defmodule DevHelpers.Purserl do
         # write newly compiled file to disk as beam file
         base = source |> Path.basename() |> Path.rootname()
         target_path = Path.join(Mix.Project.compile_path(), base <> ".beam")
-        log("compile_erlang:compiled_ok", {source, retries, target_path, "warnings", warnings}, state)
+        log("compile_erlang:compiled_ok", {source, retries, target_path, "warnings", warnings}, state.logfile)
         File.write!(target_path, binary)
 
         # reload in memory
         :code.purge(module)
         :code.delete(module)
-        log("compile_erlang:purged", {source, retries, target_path}, state)
+        log("compile_erlang:purged", {source, retries, target_path}, state.logfile)
         {:module, module} = :code.load_binary(module, source, binary)
-        log("compile_erlang:loaded", {source, retries, target_path}, state)
+        log("compile_erlang:loaded", {source, retries, target_path}, state.logfile)
         {module, binary}
 
       err ->
-        log("compile_erlang:not-ok", {source, retries, err}, state)
+        log("compile_erlang:not-ok", {source, retries, err}, state.logfile)
 
         cond do
           retries <= 10 ->
@@ -347,7 +359,101 @@ defmodule DevHelpers.Purserl do
     {:ok, "purs compile " <> String.trim_leading(args, " ")}
   end
 
-  def process_warnings(state, warnings, errors) do
+  def cache(logfile, cache_file, things) do
+    db = Map.new()
+    db = things |> List.foldl(db, fn x, acc -> merge(logfile, x, acc) end)
+
+
+    warns = load_warning_cache(logfile, cache_file)
+    merged = Map.merge(warns, db)
+    store_warning_cache(cache_file, merged)
+
+    #keys = merged |> Map.keys()
+    #IO.inspect {:purserl_cache, keys, merged}
+    merged
+  end
+
+  def del_cache(logfile, cache_file, key) do
+    warns = load_warning_cache(logfile, cache_file)
+    merged = warns |> Map.delete(key)
+    store_warning_cache(cache_file, merged)
+
+    #keys = merged |> Map.keys()
+    #IO.inspect {:purserl_cache_del, key, keys, merged}
+    merged
+  end
+
+  def load_warning_cache(_logfile, nil), do: %{}
+  def load_warning_cache(logfile, path) do
+    case File.read(path) do
+      {:ok, res} -> :erlang.binary_to_term(res)
+      {:error, :enoent} -> %{}
+      {:error, err} ->
+        runtime_bug(logfile, {:purserl_load_warning_cache_file_error, err})
+        %{}
+    end
+  end
+
+  def store_warning_cache(nil, _), do: nil
+  def store_warning_cache(path, things) do
+    data = :erlang.term_to_binary(things)
+    File.write!(path, data)
+  end
+
+  def get_filename(logfile, thing) do
+    module_from_first_span = thing |> Map.get("allSpans", nil) |> List.first(nil) |> Map.get("name", nil)
+    moduleName = Map.get(thing, "moduleName", nil) || module_from_first_span
+    if moduleName != nil do
+      moduleName
+    else
+      path = Map.get(thing, "filename", nil)
+      try do
+        path
+          |> String.split("src/", parts: 2)
+          #|> IO.inspect(label: "src/")
+          |> (fn [_,a] -> a end).()
+          |> String.split(".purs", parts: 2)
+          #|> IO.inspect(label: ".purs")
+          |> (fn [a,_] -> a end).()
+          |> String.replace("/", ".")
+      rescue e in FunctionClauseError ->
+        runtime_bug(logfile, {:get_filename, e})
+        #IO.inspect {:get_filename, thing, Map.keys(thing), module_from_first_span}
+        "<missing-filename>"
+      end
+    end
+  end
+
+  def merge(logfile, thing, db) do
+    name = get_filename(logfile, thing)
+    # [drathier]: TODO hotfix while debugging, ignore all spago errors and warnings even in cache
+    if name |> String.starts_with?(".spago") do
+      db
+    else
+      existing = Map.get(db, name, [])
+      Map.put(db, name, [thing] ++ existing)
+    end
+  end
+
+  def process_warnings(state), do: process_warnings(state, [], [], :done)
+  def process_warnings(state, warnings, errors, done_or_wip) do
+    things =
+      (errors |> Enum.map(fn x -> x |> Map.put(:kind, :error) end)) ++
+        (warnings |> Enum.map(fn x -> x |> Map.put(:kind, :warning) end))
+
+    things2 = cache(state.logfile, state.build_error_cache, things)
+    things3 = things2 |> Map.values() |> Enum.reduce([], fn a, b -> a ++ b end) |> Enum.uniq() # |> IO.inspect(label: "things3")
+
+    case {state.build_error_cache, done_or_wip} do
+      # [drathier]: build cache is disabled; print warnings as we go on :wip
+      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip)
+
+      # [drathier]: build cache is enabled; store warnings, and we'll print them when the build is all :done
+      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip)
+      {_build_error_cache, :wip} -> :wip
+    end
+  end
+  def process_warnings_impl(state, things, done_or_wip) do
     # warnings = [
     #  %{
     #    "allSpans" => [
@@ -376,10 +482,6 @@ defmodule DevHelpers.Purserl do
     #    }
     #  }
     # ]
-
-    things =
-      (errors |> Enum.map(fn x -> x |> Map.put(:kind, :error) end)) ++
-        (warnings |> Enum.map(fn x -> x |> Map.put(:kind, :warning) end))
 
     not_in_spago =
       things
@@ -419,7 +521,7 @@ defmodule DevHelpers.Purserl do
           }
         } = x
 
-        {error_kind_ord(x), filename, start_line, start_column, end_line, end_column}
+        {error_kind_ord(state.logfile, x), filename, start_line, start_column, end_line, end_column}
       end)
 
     file_contents_map =
@@ -429,8 +531,7 @@ defmodule DevHelpers.Purserl do
       |> Enum.dedup()
       |> List.foldl(%{}, fn filename, acc ->
         case Map.get(acc, filename) do
-          nil when filename != "" ->
-            IO.puts("filename: \"" <> filename <> "\"")
+          nil ->
             Map.put(acc, filename, File.read!(filename))
 
           _ ->
@@ -443,11 +544,11 @@ defmodule DevHelpers.Purserl do
       |> Enum.map(fn x -> Map.put(x, :file_contents_before, file_contents_map[x["filename"]]) end)
 
     should_be_fixed_automatically =
-      if Enum.member?(["", "0", "false"], System.get_env("PURERLEX_FIX", "")) do
+      if done_or_wip == :wip || Enum.member?(["", "0", "false"], System.get_env("PURERLEX_FIX", "")) do
         []
       else
         with_file_contents
-        |> Enum.filter(&can_be_fixed_automatically?/1)
+        |> Enum.filter(fn a -> can_be_fixed_automatically?(state.logfile, a) end)
       end
 
     reverse_sorted_applications =
@@ -472,7 +573,7 @@ defmodule DevHelpers.Purserl do
     to_print =
       with_file_contents
       |> Enum.flat_map(fn x ->
-        case error_kind(x) do
+        case error_kind(state.logfile, x) do
           :ignore ->
             []
 
@@ -522,7 +623,7 @@ defmodule DevHelpers.Purserl do
       chunk
       |> Enum.map(fn {_, text} -> text end)
       |> Enum.map(fn chunk ->
-        log("print_err_warn_to_stdout", {chunk}, state)
+        log("print_err_warn_to_stdout", {chunk}, state.logfile)
         ioputs(chunk)
       end)
 
@@ -626,7 +727,7 @@ defmodule DevHelpers.Purserl do
                    |> prefix_all_lines(Color.yellow() <> "  | " <> Color.reset()))
 
               _ ->
-                runtime_bug({"###", "UNEXPECTED_SNIPPET_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+                runtime_bug(state.logfile, {"###", "UNEXPECTED_SNIPPET_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
 
                 ""
             end
@@ -648,7 +749,7 @@ defmodule DevHelpers.Purserl do
               Color.red() <> "Error" <> Color.reset()
 
             _ ->
-              runtime_bug({"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+              runtime_bug(state.logfile, {"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
 
               ""
           end
@@ -662,7 +763,7 @@ defmodule DevHelpers.Purserl do
           "\n"
 
       _ ->
-        runtime_bug({"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+        runtime_bug(state.logfile, {"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
 
         ""
     end
@@ -895,16 +996,6 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def parse_out_span(%{ :file_contents_before => old_content }) when old_content == nil do
-    %{
-      "prefix_lines" => "",
-      "prefix_columns" => "",
-      "infix_lines" => "Failed to parse out error snippet",
-      "infix_columns" => "",
-      "suffix_columns" => "",
-      "suffix_lines" => ""
-    }
-  end
   def parse_out_span(%{
         :file_contents_before => old_content,
         :start_line => start_line,
@@ -943,12 +1034,12 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def can_be_fixed_automatically?(x) do
-    error_kind(x) == :warn_fixable
+  def can_be_fixed_automatically?(logfile, x) do
+    error_kind(logfile, x) == :warn_fixable
   end
 
-  def error_kind_ord(x) do
-    case error_kind(x) do
+  def error_kind_ord(logfile, x) do
+    case error_kind(logfile, x) do
       :warn_msg ->
         1
 
@@ -966,7 +1057,7 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def error_kind(x) do
+  def error_kind(logfile, x) do
     # :ignore
     # :warn_fixable
     # :warn_no_autofix
@@ -1413,19 +1504,19 @@ defmodule DevHelpers.Purserl do
 
       ###
       _ ->
-        runtime_bug({"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
+        runtime_bug(logfile, {"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
 
         :warn_msg
     end
   end
 
-  def runtime_bug(msg) do
+  def runtime_bug(logfile, msg) do
+    if logfile != nil do
+      log("runtime_bug", msg, logfile)
+    end
     IO.inspect(msg, width: :infinity, printable_limit: :infinity, limit: :infinity)
   end
 
-  def apply_suggestion( %{ "filename" => filename } = inp, state) when filename == "" do
-    :no_change
-  end
   def apply_suggestion(
         %{
           "filename" => filename,
@@ -1466,11 +1557,11 @@ defmodule DevHelpers.Purserl do
         reg["suffix_lines"]
 
     if new_content != old_content do
-      log("apply_suggestion:applied", {inp}, state)
+      log("apply_suggestion:applied", {inp}, state.logfile)
       :ok = File.write!(filename, new_content)
       :applied_suggestion
     else
-      log("apply_suggestion:noop", {inp}, state)
+      log("apply_suggestion:noop", {inp}, state.logfile)
       :no_change
     end
   end
