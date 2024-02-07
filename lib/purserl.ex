@@ -401,7 +401,7 @@ defmodule DevHelpers.Purserl do
   end
 
   def get_filename(logfile, thing) do
-    module_from_first_span = thing |> Map.get("allSpans", nil) |> List.first(nil) |> Map.get("name", nil)
+    module_from_first_span = thing |> Map.get("allSpans", nil) |> List.first(%{}) |> Map.get("name", nil)
     moduleName = Map.get(thing, "moduleName", nil) || module_from_first_span
     if moduleName != nil do
       moduleName
