@@ -363,7 +363,6 @@ defmodule DevHelpers.Purserl do
     db = Map.new()
     db = things |> List.foldl(db, fn x, acc -> merge(logfile, x, acc) end)
 
-
     warns = load_warning_cache(logfile, cache_file)
     merged = Map.merge(warns, db)
     store_warning_cache(cache_file, merged)
@@ -386,6 +385,7 @@ defmodule DevHelpers.Purserl do
   def load_warning_cache(_logfile, nil), do: %{}
   def load_warning_cache(logfile, path) do
     case File.read(path) do
+      {:ok, ""} -> %{}
       {:ok, res} -> :erlang.binary_to_term(res)
       {:error, :enoent} -> %{}
       {:error, err} ->
@@ -570,6 +570,7 @@ defmodule DevHelpers.Purserl do
     reverse_sorted_applications
     |> Enum.map(fn x -> apply_suggestion(x, state) end)
 
+    terse = Enum.member?(["", "0", "false"], System.get_env("PURERLEX_TERSE", ""))
     to_print =
       with_file_contents
       |> Enum.flat_map(fn x ->
@@ -581,13 +582,13 @@ defmodule DevHelpers.Purserl do
             []
 
           :warn_fixable ->
-            [{x, format_warning_or_error(state, :warn_fixable, x)}]
+            [{x, format_warning_or_error(state, terse, :warn_fixable, x)}]
 
           :warn_no_autofix ->
-            [{x, format_warning_or_error(state, :warn_no_autofix, x)}]
+            [{x, format_warning_or_error(state, terse, :warn_no_autofix, x)}]
 
           :error ->
-            [{x, format_warning_or_error(state, :error, x)}]
+            [{x, format_warning_or_error(state, terse, :error, x)}]
         end
       end)
 
@@ -638,6 +639,7 @@ defmodule DevHelpers.Purserl do
 
   def format_warning_or_error(
         state,
+        terse,
         kind,
         inp
       ) do
@@ -672,6 +674,16 @@ defmodule DevHelpers.Purserl do
           System.get_env("PURERLEX_MAX_LINES_OF_CONTEXT", "3")
           |> String.trim_trailing()
           |> String.to_integer()
+
+
+        start_line =
+          all_spans
+          |> Enum.find_value(0, fn inp ->
+            case inp do
+              %{ "start" => [start_line, _] } -> start_line
+              _ -> nil
+            end
+            end)
 
         snippets =
           all_spans
@@ -754,13 +766,38 @@ defmodule DevHelpers.Purserl do
               ""
           end
 
-        (Color.cyan() <>
-           error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
-          "\n" <>
-          Enum.join(snippets, "\n") <>
-          "\n\n" <>
-          (message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
-          "\n"
+        short_tag =
+          case kind do
+            :warn_fixable ->
+              if Enum.member?(["", "0", "false"], System.get_env("PURERLEX_FIX", "")) do
+                Color.yellow() <> "X" <> Color.reset()
+              else
+                Color.green() <> "F" <> Color.reset()
+              end
+
+            :warn_no_autofix ->
+              Color.yellow() <> "W" <> Color.reset()
+
+            :error ->
+              Color.red() <> "E" <> Color.reset()
+
+            _ ->
+              runtime_bug(state.logfile, {"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
+
+              ""
+          end
+
+        if terse do
+          short_tag <> " " <> Color.cyan() <> error_code <> Color.reset() <> " " <> format_path_with_line(filename, start_line)
+        else
+          (Color.cyan() <>
+             error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
+            "\n" <>
+            Enum.join(snippets, "\n") <>
+            "\n\n" <>
+            (message |> add_prefix_if_missing("  ") |> syntax_highlight_indentex_lines("    ")) <>
+            "\n"
+        end
 
       _ ->
         runtime_bug(state.logfile, {"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp})
@@ -1176,7 +1213,7 @@ defmodule DevHelpers.Purserl do
         :error
 
       %{"errorCode" => "AmbiguousTypeVariables"} ->
-        :error
+        :warn_no_autofix
 
       %{"errorCode" => "ArgListLengthsDiffer"} ->
         :error
@@ -1502,6 +1539,8 @@ defmodule DevHelpers.Purserl do
       %{"errorCode" => "VisibleQuantificationCheckFailureInType"} ->
         :error
 
+      %{"errorCode" => "CannotApplyExpressionOfTypeOnType"} ->
+        :error
       ###
       _ ->
         runtime_bug(logfile, {"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
