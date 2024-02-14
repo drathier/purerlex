@@ -570,7 +570,7 @@ defmodule DevHelpers.Purserl do
     reverse_sorted_applications
     |> Enum.map(fn x -> apply_suggestion(x, state) end)
 
-    terse = Enum.member?(["", "0", "false"], System.get_env("PURERLEX_TERSE", ""))
+    terse = not Enum.member?(["", "0", "false"], System.get_env("PURERLEX_TERSE", ""))
     to_print =
       with_file_contents
       |> Enum.flat_map(fn x ->
