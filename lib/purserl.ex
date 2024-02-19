@@ -263,6 +263,10 @@ defmodule DevHelpers.Purserl do
     {:stop, :normal, state}
   end
 
+  def handle_call(:error_cache, from, state) do
+    {:reply, warnings_to_string(state), state}
+  end
+
   def handle_call(:recompile, from, state) do
     # NOTE[drathier]: elixir usually only runs one compiler pass at a time, but there are a few (probably unintentional) exceptions which cause total havoc. This case is a workaround for that.
     case state.caller do
@@ -435,6 +439,18 @@ defmodule DevHelpers.Purserl do
     end
   end
 
+  def warnings_to_string(state) do
+    things = load_warning_cache(state.logfile, state.build_error_cache)
+             |> Map.values()
+             |> Enum.reduce([], fn a, b -> a ++ b end)
+             |> Enum.uniq() # |> IO.inspect(label: "things3")
+
+    {:ok, pid} = StringIO.open("")
+    process_warnings_impl(state, things, :done, pid)
+    {:ok, {_, output}} = StringIO.close(pid)
+    String.trim(output)
+  end
+
   def process_warnings(state), do: process_warnings(state, [], [], :done)
   def process_warnings(state, warnings, errors, done_or_wip) do
     things =
@@ -446,14 +462,14 @@ defmodule DevHelpers.Purserl do
 
     case {state.build_error_cache, done_or_wip} do
       # [drathier]: build cache is disabled; print warnings as we go on :wip
-      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip)
+      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip, :stdio)
 
       # [drathier]: build cache is enabled; store warnings, and we'll print them when the build is all :done
-      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip)
+      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip, :stdio)
       {_build_error_cache, :wip} -> :wip
     end
   end
-  def process_warnings_impl(state, things, done_or_wip) do
+  def process_warnings_impl(state, things, done_or_wip, device) do
     # warnings = [
     #  %{
     #    "allSpans" => [
@@ -603,29 +619,30 @@ defmodule DevHelpers.Purserl do
       xname = x["moduleName"] || x["filename"]
       rhs = " " <> xname <> " ====="
 
-      cond do
-        # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
-        true ->
-          ""
+      ioputs(device,
+        cond do
+          # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
+          true ->
+            ""
 
-        previous == nil ->
-          Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
+          previous == nil ->
+            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
-        previous != nil && x["filename"] != previous["filename"] ->
-          Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
+          previous != nil && x["filename"] != previous["filename"] ->
+            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
-        # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
+          # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
 
-        true ->
-          ""
-      end
-      |> ioputs()
+          true ->
+            ""
+        end
+      )
 
       chunk
       |> Enum.map(fn {_, text} -> text end)
       |> Enum.map(fn chunk ->
         log("print_err_warn_to_stdout", {chunk}, state.logfile)
-        ioputs(chunk)
+        ioputs(device, chunk)
       end)
 
       x
