@@ -154,6 +154,8 @@ defmodule DevHelpers.Purserl do
     # log whenever we get something, if applicable
     log("handle_info", msg, state.logfile)
 
+    start_compile_at = DateTime.utc_now
+
     cond do
       # spago
       msg |> String.contains?("Running command: `purs compile") ->
@@ -165,6 +167,7 @@ defmodule DevHelpers.Purserl do
 
       state.purs_cmd == nil ->
         {:noreply, state}
+
 
       # purs
       msg |> String.starts_with?("###") ->
@@ -178,12 +181,12 @@ defmodule DevHelpers.Purserl do
 
           msg |> String.starts_with?("### done compiler: 0") ->
             # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
-            process_warnings(state)
+            process_warnings(state, start_compile_at)
             reply(state, state.caller, :ok)
 
           msg |> String.starts_with?("### done compiler: 1") ->
             # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
-            process_warnings(state)
+            process_warnings(state, start_compile_at)
             reply(state, state.caller, :err)
 
           msg |> String.starts_with?("### erl-same:") ->
@@ -212,7 +215,7 @@ defmodule DevHelpers.Purserl do
         case Jason.decode(msg) do
           {:ok, v} ->
             # yes, now do stuff with it
-            process_warnings(state, v["warnings"], v["errors"], :wip)
+            process_warnings(state, start_compile_at, v["warnings"], v["errors"], :wip)
 
             {:noreply, state}
 
@@ -261,10 +264,6 @@ defmodule DevHelpers.Purserl do
   def handle_call(:shutdown_compiler, _from, state) do
     port_close(state.port, state)
     {:stop, :normal, state}
-  end
-
-  def handle_call(:error_cache, from, state) do
-    {:reply, warnings_to_string(state), state}
   end
 
   def handle_call(:recompile, from, state) do
@@ -368,7 +367,22 @@ defmodule DevHelpers.Purserl do
     db = things |> List.foldl(db, fn x, acc -> merge(logfile, x, acc) end)
 
     warns = load_warning_cache(logfile, cache_file)
+    ignore_mtime = not Enum.member?(["", "0", "false"], System.get_env("PURERLEX_IGNORE_MTIME", ""))
     merged = Map.merge(warns, db)
+             |> Enum.map(fn {k, v} ->
+                { k, v |> Enum.filter(fn thing ->
+                    # NOTE[et]: This isn't a perfect solution. If your texteditor `touches` your files having the file open might trigger a recompile. This means the cache now misses some warnings - but all warnings it shows are relevant. I think this is an improvement to what we had before where warnings *might* be relevant. I personally prefer this behavior.
+                    ignore_mtime || case File.stat(Map.get(thing, "filename") || "dummy", [{:time, :posix}]) do
+                      # If the warning is from a compilation that started after the file was modified - we keep it
+                      {:ok, %{ mtime: t }} ->
+                          t <= DateTime.to_unix(thing.start_compile_at)
+                      # If we can't read it - no one else can either so just remove the warning to avoid false positives
+                      _ ->
+                        false
+                    end
+                end) }
+             end)
+              |> Map.new
     store_warning_cache(cache_file, merged)
 
     #keys = merged |> Map.keys()
@@ -439,37 +453,25 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  def warnings_to_string(state) do
-    things = load_warning_cache(state.logfile, state.build_error_cache)
-             |> Map.values()
-             |> Enum.reduce([], fn a, b -> a ++ b end)
-             |> Enum.uniq() # |> IO.inspect(label: "things3")
-
-    {:ok, pid} = StringIO.open("")
-    process_warnings_impl(state, things, :done, pid)
-    {:ok, {_, output}} = StringIO.close(pid)
-    String.trim(output)
-  end
-
-  def process_warnings(state), do: process_warnings(state, [], [], :done)
-  def process_warnings(state, warnings, errors, done_or_wip) do
+  def process_warnings(state, start_compile_at), do: process_warnings(state, start_compile_at, [], [], :done)
+  def process_warnings(state, start_compile_at, warnings, errors, done_or_wip) do
     things =
-      (errors |> Enum.map(fn x -> x |> Map.put(:kind, :error) end)) ++
-        (warnings |> Enum.map(fn x -> x |> Map.put(:kind, :warning) end))
+      (errors |> Enum.map(fn x -> x |> Map.put(:kind, :error) |> Map.put(:start_compile_at, start_compile_at) end)) ++
+        (warnings |> Enum.map(fn x -> x |> Map.put(:kind, :warning) |> Map.put(:start_compile_at, start_compile_at) end))
 
     things2 = cache(state.logfile, state.build_error_cache, things)
     things3 = things2 |> Map.values() |> Enum.reduce([], fn a, b -> a ++ b end) |> Enum.uniq() # |> IO.inspect(label: "things3")
 
     case {state.build_error_cache, done_or_wip} do
       # [drathier]: build cache is disabled; print warnings as we go on :wip
-      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip, :stdio)
+      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip)
 
       # [drathier]: build cache is enabled; store warnings, and we'll print them when the build is all :done
-      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip, :stdio)
+      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip)
       {_build_error_cache, :wip} -> :wip
     end
   end
-  def process_warnings_impl(state, things, done_or_wip, device) do
+  def process_warnings_impl(state, things, done_or_wip) do
     # warnings = [
     #  %{
     #    "allSpans" => [
@@ -548,8 +550,12 @@ defmodule DevHelpers.Purserl do
       |> List.foldl(%{}, fn filename, acc ->
         case Map.get(acc, filename) do
           nil ->
-            Map.put(acc, filename, File.read!(filename))
-
+            case File.read(filename) do
+              {:ok, content} -> Map.put(acc, filename, content)
+              {:error, err} ->
+                  runtime_bug(state.logfile, {"Failed to read file contents when writing warning", filename, err})
+                  ""
+            end
           _ ->
             acc
         end
@@ -619,30 +625,29 @@ defmodule DevHelpers.Purserl do
       xname = x["moduleName"] || x["filename"]
       rhs = " " <> xname <> " ====="
 
-      ioputs(device,
-        cond do
-          # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
-          true ->
-            ""
+      cond do
+        # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
+        true ->
+          ""
 
-          previous == nil ->
-            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
+        previous == nil ->
+          Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
-          previous != nil && x["filename"] != previous["filename"] ->
-            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
+        previous != nil && x["filename"] != previous["filename"] ->
+          Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
 
-          # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
+        # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
 
-          true ->
-            ""
-        end
-      )
+        true ->
+          ""
+      end
+      |> ioputs()
 
       chunk
       |> Enum.map(fn {_, text} -> text end)
       |> Enum.map(fn chunk ->
         log("print_err_warn_to_stdout", {chunk}, state.logfile)
-        ioputs(device, chunk)
+        ioputs(chunk)
       end)
 
       x
@@ -1561,7 +1566,6 @@ defmodule DevHelpers.Purserl do
       ###
       _ ->
         runtime_bug(logfile, {"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x})
-
         :warn_msg
     end
   end
@@ -1589,36 +1593,45 @@ defmodule DevHelpers.Purserl do
         state
       ) do
     # NOTE[drathier]: we're reading the file contents back for each applied fix, so they all get applied. We could do them all in-memory, but this is easier to do. It's way past midnight.
-    old_content = File.read!(filename)
 
-    reg =
-      parse_out_span(%{
-        :file_contents_before => old_content,
-        :start_line => start_line,
-        :start_column => start_column,
-        :end_line => end_line,
-        :end_column => end_column
-      })
+    case File.read(filename) do
+      {:ok, old_content} ->
+        reg =
+          parse_out_span(%{
+            :file_contents_before => old_content,
+            :start_line => start_line,
+            :start_column => start_column,
+            :end_line => end_line,
+            :end_column => end_column
+          })
 
-    # TODO[drathier]: why is there two trailing newlines in the suggested replacement?
-    cleaned_replacement =
-      replacement
-      |> String.replace_suffix("\n\n", "\n")
+        # TODO[drathier]: why is there two trailing newlines in the suggested replacement?
+        cleaned_replacement =
+          replacement
+          |> String.replace_suffix("\n\n", "\n")
 
-    new_content =
-      reg["prefix_lines"] <>
-        reg["prefix_columns"] <>
-        cleaned_replacement <>
-        reg["suffix_columns"] <>
-        reg["suffix_lines"]
+        new_content =
+          reg["prefix_lines"] <>
+            reg["prefix_columns"] <>
+            cleaned_replacement <>
+            reg["suffix_columns"] <>
+            reg["suffix_lines"]
 
-    if new_content != old_content do
-      log("apply_suggestion:applied", {inp}, state.logfile)
-      :ok = File.write!(filename, new_content)
-      :applied_suggestion
-    else
-      log("apply_suggestion:noop", {inp}, state.logfile)
-      :no_change
+        if new_content != old_content do
+          log("apply_suggestion:applied", {inp}, state.logfile)
+          case File.write(filename, new_content) do
+            :ok -> nil
+            {:error, err} ->
+              runtime_bug(state.logfile, {"Failed to write file after auto-fix", filename, err })
+          end
+          :applied_suggestion
+        else
+          log("apply_suggestion:noop", {inp}, state.logfile)
+          :no_change
+        end
+      {:error, err} ->
+        runtime_bug(state.logfile, {"Failed to read file for auto-fix", filename, err })
+        :error_reading_file
     end
   end
 
