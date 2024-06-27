@@ -35,7 +35,7 @@ defmodule DevHelpers.Purserl do
     state = %{
       port: nil,
       caller: [],
-      purs_cmd: nil,
+      purs_cmd: "purs compile --codegen erl \"lib/**/*.purs\"",
       purs_args: config |> Keyword.get(:purs_args, ""),
       ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
       ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).(),
@@ -84,29 +84,8 @@ defmodule DevHelpers.Purserl do
     # files |> Enum.map(fn x -> compile_erlang(x) end)
     # IO.inspect({:done_prebuild_erlc, files})
 
-    {:ok, state} = start_spago(state)
+    {:ok, state} = run_purs(state)
 
-    {:ok, state}
-  end
-
-  def start_spago(state) do
-    # NOTE[fh]: cmd has to be charlist strings ('qwe'), not binary strings ("qwe")
-    cmd = 'spago build --purs-args \"--codegen erl\" -v --no-psa'
-
-    port =
-      port_open(
-        {:spawn, cmd},
-        [
-          :binary,
-          :exit_status,
-          :stderr_to_stdout,
-          {:env, [{'PURS_LOOP_EVERY_SECOND', '0'}]},
-          {:line, 999_999_999}
-        ],
-        state
-      )
-
-    state = %{state | port: port}
     {:ok, state}
   end
 
@@ -170,18 +149,9 @@ defmodule DevHelpers.Purserl do
 
     start_compile_at = DateTime.utc_now()
 
+    # IO.puts(msg)
+
     cond do
-      # spago
-      msg |> String.contains?("Running command: `purs compile") ->
-        port_close(state.port, state)
-
-        {:ok, cmd} = extract_purs_cmd(msg)
-        {:ok, state} = run_purs(%{state | port: nil, purs_cmd: cmd})
-        {:noreply, state}
-
-      state.purs_cmd == nil ->
-        {:noreply, state}
-
       # purs
       msg |> String.starts_with?("###") ->
         cond do
@@ -288,6 +258,7 @@ defmodule DevHelpers.Purserl do
     # NOTE[drathier]: elixir usually only runs one compiler pass at a time, but there are a few (probably unintentional) exceptions which cause total havoc. This case is a workaround for that.
     case state.caller do
       [] ->
+       # NOTE[em]: This is what actually triggers the recompile
         _ = port_command(state.port, 'sdf\n', [], state)
 
       _ ->
@@ -377,15 +348,6 @@ defmodule DevHelpers.Purserl do
             raise CompileError
         end
     end
-  end
-
-  def extract_purs_cmd(line) do
-    split_str = "Running command: `purs compile"
-
-    [_debug, args_with_end] = line |> String.split(split_str, parts: 2)
-    [args, _end] = args_with_end |> String.split("`", parts: 2)
-    # [drathier]: trim_leading to allow easier searching in logfiles
-    {:ok, "purs compile " <> String.trim_leading(args, " ")}
   end
 
   def cache(logfile, cache_file, things) do
