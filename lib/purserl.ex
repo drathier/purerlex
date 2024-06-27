@@ -35,7 +35,8 @@ defmodule DevHelpers.Purserl do
     state = %{
       port: nil,
       caller: [],
-      purs_cmd: nil,
+      purs_cmd: config |> Keyword.get(:purs_cmd, nil),
+      extract_cmd: config |> Keyword.get(:purs_cmd, "") == "",
       purs_args: config |> Keyword.get(:purs_args, ""),
       ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
       ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).(),
@@ -84,7 +85,11 @@ defmodule DevHelpers.Purserl do
     # files |> Enum.map(fn x -> compile_erlang(x) end)
     # IO.inspect({:done_prebuild_erlc, files})
 
-    {:ok, state} = start_spago(state)
+    {:ok, state} = if state.purs_cmd == nil do
+      start_spago(state)
+    else
+      run_purs(state)
+    end
 
     {:ok, state}
   end
@@ -172,7 +177,7 @@ defmodule DevHelpers.Purserl do
 
     cond do
       # spago
-      msg |> String.contains?("Running command: `purs compile") ->
+      msg |> String.contains?("Running command: `purs compile") and state.extract_cmd ->
         port_close(state.port, state)
 
         {:ok, cmd} = extract_purs_cmd(msg)
