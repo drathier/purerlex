@@ -535,10 +535,10 @@ defmodule DevHelpers.Purserl do
 
     case {state.build_error_cache, done_or_wip} do
       # [drathier]: build cache is disabled; print warnings as we go on :wip
-      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip, :stdio)
+      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip, :stderr)
 
       # [drathier]: build cache is enabled; store warnings, and we'll print them when the build is all :done
-      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip, :stdio)
+      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip, :stderr)
       {_build_error_cache, :wip} -> :wip
     end
   end
