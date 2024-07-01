@@ -461,6 +461,7 @@ defmodule DevHelpers.Purserl do
 
   def store_warning_cache(path, things) do
     data = :erlang.term_to_binary(things)
+    File.mkdir_p!(Path.dirname(path))
     File.write!(path, data)
   end
 
