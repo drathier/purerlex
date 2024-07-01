@@ -129,9 +129,6 @@ defmodule DevHelpers.Purserl do
         state
       )
 
-    # send one newline to trigger a first recompile, in case nothing needed to be rebuilt. Out handle_info is looking for a "done compiler" message, which is printed when compilation finishes
-    _ = port_command(port, 'first\n', [], state)
-
     {:ok, %{state | port: port}}
   end
 
@@ -293,6 +290,7 @@ defmodule DevHelpers.Purserl do
     # NOTE[drathier]: elixir usually only runs one compiler pass at a time, but there are a few (probably unintentional) exceptions which cause total havoc. This case is a workaround for that.
     case state.caller do
       [] ->
+        # NOTE[em]: This is what triggers the compiler
         _ = port_command(state.port, 'sdf\n', [], state)
 
       _ ->
