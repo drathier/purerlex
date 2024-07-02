@@ -199,13 +199,13 @@ defmodule DevHelpers.Purserl do
           msg |> String.starts_with?("### done compiler: 0") ->
             await_tasks(state)
             process_warnings(state, start_compile_at)
-            # print_elapsed(state)
+            print_elapsed(state)
             reply(state, state.caller, :ok)
 
           msg |> String.starts_with?("### done compiler: 1") ->
             await_tasks(state)
             process_warnings(state, start_compile_at)
-            # print_elapsed(state)
+            print_elapsed(state)
             reply(state, state.caller, :err)
 
           msg |> String.starts_with?("### erl-same:") ->
