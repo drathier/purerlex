@@ -159,7 +159,7 @@ defmodule DevHelpers.Purserl do
         contents_str =
           inspect(contents, width: :infinity, printable_limit: :infinity, limit: :infinity)
 
-        ioputs(f, contents_str)
+        IO.puts(f, contents_str)
     end
 
     nil
@@ -239,8 +239,8 @@ defmodule DevHelpers.Purserl do
             cond do
               msg |> String.contains?(" Compiling ") ->
                 # NOTE[drathier]: this eats the last line before this runs. We're printing the "Compiling ..." message when the compiler launches explicitly so that this line has something to eat. Erlang compiler warnings are sometimes eaten by this too, so it's not a perfect solution.
-                ioputs(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
-                # ioputs("\n" <> msg)
+                IO.puts(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
+                # IO.puts("\n" <> msg)
 
                 # [ 848 of 1058] Compiling S64 Lesslie.Fortnox.Streams.Storage
                 [_, a] = msg |> String.split(" Compiling ", parts: 2)
@@ -258,7 +258,7 @@ defmodule DevHelpers.Purserl do
 
               true ->
                 # nope, print it
-                ioputs(msg)
+                IO.puts(msg)
                 {:noreply, state}
             end
         end
@@ -267,12 +267,12 @@ defmodule DevHelpers.Purserl do
 
   def handle_info({_port, {:exit_status, exit_status}}, state) do
     msg = "Purs exited unexpectedly with code #{exit_status}"
-    ioputs(msg)
+    IO.puts(msg)
     {:stop, msg, state}
   end
 
   def handle_info(msg, state) do
-    ioputs("handle_info unhandled pattern (msg:#{msg}) (state:#{state})")
+    IO.puts("handle_info unhandled pattern (msg:#{msg}) (state:#{state})")
     {:noreply, state}
   end
 
@@ -294,7 +294,7 @@ defmodule DevHelpers.Purserl do
         _ = port_command(state.port, 'sdf\n', [], state)
 
       _ ->
-        # ioputs(inspect({"[purerlex]: skipping duplicate concurrent recompile", from, state.caller}, width: 2000))
+        # IO.puts(inspect({"[purerlex]: skipping duplicate concurrent recompile", from, state.caller}, width: 2000))
         :already_running
     end
 
@@ -373,9 +373,9 @@ defmodule DevHelpers.Purserl do
             compile_erlang(source, state, retries + 1)
 
           true ->
-            ioputs("#############################################################################")
-            ioputs("####### Erl compiler failed to run; something has gone terribly wrong #######")
-            ioputs("#############################################################################")
+            IO.puts("#############################################################################")
+            IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
+            IO.puts("#############################################################################")
 
             raise CompileError
         end
@@ -707,7 +707,7 @@ defmodule DevHelpers.Purserl do
       xname = x["moduleName"] || x["filename"]
       rhs = " " <> xname <> " ====="
 
-      ioputs(device,
+      IO.puts(device,
         cond do
           # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
           true ->
@@ -730,7 +730,7 @@ defmodule DevHelpers.Purserl do
       |> Enum.map(fn {_, text} -> text end)
       |> Enum.map(fn chunk ->
         log("print_err_warn_to_stdout", {chunk}, state.logfile)
-        ioputs(device, chunk)
+        IO.puts(device, chunk)
       end)
 
       x
@@ -1767,10 +1767,6 @@ defmodule DevHelpers.Purserl do
         runtime_bug(state.logfile, {"Failed to read file for auto-fix", filename, err})
         :error_reading_file
     end
-  end
-
-  defp ioputs(device \\ :stdio, item) do
-    IO.puts(device, item)
   end
 
   defp reply(state, caller, response) do
