@@ -69,7 +69,9 @@ defmodule DevHelpers.Purserl do
                 nil
             end
         end,
-      build_error_cache: config |> Keyword.get(:build_error_cache, nil)
+      build_error_cache: config |> Keyword.get(:build_error_cache, nil),
+      tasks: [],
+      started_at: nil,
     }
 
     log("init", {config, System.get_env()}, state.logfile)
@@ -159,7 +161,7 @@ defmodule DevHelpers.Purserl do
         contents_str =
           inspect(contents, width: :infinity, printable_limit: :infinity, limit: :infinity)
 
-        ioputs(f, contents_str)
+        IO.puts(f, contents_str)
     end
 
     nil
@@ -189,19 +191,21 @@ defmodule DevHelpers.Purserl do
         cond do
           msg == "### launching compiler" ->
             IO.puts("Compiling ...")
-            {:noreply, state}
+            {:noreply, %{ state | started_at: DateTime.utc_now() }}
 
           msg == "### read externs" ->
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 0") ->
-            # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
+            await_tasks(state)
             process_warnings(state, start_compile_at)
+            print_elapsed(state)
             reply(state, state.caller, :ok)
 
           msg |> String.starts_with?("### done compiler: 1") ->
-            # IO.inspect({DateTime.utc_now() |> DateTime.to_iso8601(), :recompile_replying, msg, state.caller, state.run_queue})
+            await_tasks(state)
             process_warnings(state, start_compile_at)
+            print_elapsed(state)
             reply(state, state.caller, :err)
 
           msg |> String.starts_with?("### erl-same:") ->
@@ -211,12 +215,12 @@ defmodule DevHelpers.Purserl do
             ["", path_to_changed_file] = msg |> String.split("### erl-diff:", parts: 2)
 
             # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
-            cond do
+            state = cond do
               path_to_changed_file |> String.ends_with?(".erl") ->
-                compile_erlang(path_to_changed_file, state)
+                %{ state | tasks: [spawn_link(__MODULE__, :compile_erlang, [path_to_changed_file, state.logfile])|state.tasks] }
 
               true ->
-                nil
+                state
             end
 
             {:noreply, state}
@@ -239,8 +243,8 @@ defmodule DevHelpers.Purserl do
             cond do
               msg |> String.contains?(" Compiling ") ->
                 # NOTE[drathier]: this eats the last line before this runs. We're printing the "Compiling ..." message when the compiler launches explicitly so that this line has something to eat. Erlang compiler warnings are sometimes eaten by this too, so it's not a perfect solution.
-                ioputs(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
-                # ioputs("\n" <> msg)
+                IO.puts(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
+                # IO.puts("\n" <> msg)
 
                 # [ 848 of 1058] Compiling S64 Lesslie.Fortnox.Streams.Storage
                 [_, a] = msg |> String.split(" Compiling ", parts: 2)
@@ -258,7 +262,7 @@ defmodule DevHelpers.Purserl do
 
               true ->
                 # nope, print it
-                ioputs(msg)
+                IO.puts(msg)
                 {:noreply, state}
             end
         end
@@ -267,13 +271,8 @@ defmodule DevHelpers.Purserl do
 
   def handle_info({_port, {:exit_status, exit_status}}, state) do
     msg = "Purs exited unexpectedly with code #{exit_status}"
-    ioputs(msg)
+    IO.puts(msg)
     {:stop, msg, state}
-  end
-
-  def handle_info(msg, state) do
-    ioputs("handle_info unhandled pattern (msg:#{msg}) (state:#{state})")
-    {:noreply, state}
   end
 
   @impl true
@@ -294,7 +293,7 @@ defmodule DevHelpers.Purserl do
         _ = port_command(state.port, 'sdf\n', [], state)
 
       _ ->
-        # ioputs(inspect({"[purerlex]: skipping duplicate concurrent recompile", from, state.caller}, width: 2000))
+        # IO.puts(inspect({"[purerlex]: skipping duplicate concurrent recompile", from, state.caller}, width: 2000))
         :already_running
     end
 
@@ -335,10 +334,11 @@ defmodule DevHelpers.Purserl do
   ###
 
   # Compiles and loads an Erlang source file, returns {module, binary}
-  defp compile_erlang(source, state, retries \\ 0) do
-    log("compile_erlang", {source, retries}, state.logfile)
+  def compile_erlang(source, logfile, retries \\ 0) do
+    log("compile_erlang", {source, retries}, logfile)
     source = Path.relative_to_cwd(source) |> String.to_charlist()
 
+    # st = DateTime.utc_now()
     case :compile.file(source, [:binary, :return_warnings]) do
       {:ok, module, binary, warnings} ->
         # write newly compiled file to disk as beam file
@@ -348,7 +348,7 @@ defmodule DevHelpers.Purserl do
         log(
           "compile_erlang:compiled_ok",
           {source, retries, target_path, "warnings", warnings},
-          state.logfile
+          logfile
         )
 
         File.write!(target_path, binary)
@@ -356,13 +356,13 @@ defmodule DevHelpers.Purserl do
         # reload in memory
         :code.purge(module)
         :code.delete(module)
-        log("compile_erlang:purged", {source, retries, target_path}, state.logfile)
+        log("compile_erlang:purged", {source, retries, target_path}, logfile)
         {:module, module} = :code.load_binary(module, source, binary)
-        log("compile_erlang:loaded", {source, retries, target_path}, state.logfile)
+        log("compile_erlang:loaded", {source, retries, target_path}, logfile)
         {module, binary}
 
       err ->
-        log("compile_erlang:not-ok", {source, retries, err}, state.logfile)
+        log("compile_erlang:not-ok", {source, retries, err}, logfile)
 
         cond do
           retries <= 10 ->
@@ -370,16 +370,17 @@ defmodule DevHelpers.Purserl do
             Process.sleep(sleep_time)
 
             # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
-            compile_erlang(source, state, retries + 1)
+            compile_erlang(source, logfile, retries + 1)
 
           true ->
-            ioputs("#############################################################################")
-            ioputs("####### Erl compiler failed to run; something has gone terribly wrong #######")
-            ioputs("#############################################################################")
+            IO.puts("#############################################################################")
+            IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
+            IO.puts("#############################################################################")
 
             raise CompileError
         end
     end
+    # IO.inspect({DateTime.diff(DateTime.utc_now(), st, :millisecond), source})
   end
 
   def extract_purs_cmd(line) do
@@ -707,7 +708,7 @@ defmodule DevHelpers.Purserl do
       xname = x["moduleName"] || x["filename"]
       rhs = " " <> xname <> " ====="
 
-      ioputs(device,
+      IO.puts(device,
         cond do
           # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
           true ->
@@ -730,7 +731,7 @@ defmodule DevHelpers.Purserl do
       |> Enum.map(fn {_, text} -> text end)
       |> Enum.map(fn chunk ->
         log("print_err_warn_to_stdout", {chunk}, state.logfile)
-        ioputs(device, chunk)
+        IO.puts(device, chunk)
       end)
 
       x
@@ -1769,25 +1770,32 @@ defmodule DevHelpers.Purserl do
     end
   end
 
-  defp ioputs(device \\ :stdio, item) do
-    IO.puts(device, item)
+  defp await_task(t) do
+    case Process.alive?(t) do
+      true ->
+        # IO.puts("Waiting for Erlang compilation to finish ...")
+        ref = Process.monitor(t)
+        receive do
+          {:DOWN, ^ref, :process, ^t, :normal} -> :ok
+        end
+      false ->
+        :ok
+    end
+  end
+
+  defp await_tasks(state) do
+    state.tasks
+    |> Enum.map(fn t -> :ok = await_task(t) end)
+    %{ state | tasks: [] }
+  end
+
+  defp print_elapsed(state) do
+    ms = DateTime.diff(DateTime.utc_now(), state.started_at, :millisecond)
+    IO.puts("Compilation took #{ms} ms")
   end
 
   defp reply(state, caller, response) do
     caller |> Enum.map(fn c -> GenServer.reply(c, response) end)
     {:noreply, %{state | caller: []}}
-
-    # try do
-    #  GenServer.reply(caller, response)
-    #  {:noreply, %{state | caller: nil}}
-    # rescue
-    #  reason in FunctionClauseError ->
-    #    case reason do
-    #      %FunctionClauseError{module: :gen, function: :reply, arity: 2, kind: nil, args: nil, clauses: nil} ->
-    #        {:noreply, %{state | caller: nil}}
-    #      _ ->
-    #        throw(inspect({:genserver_reply_catch_bad_FunctionClauseError, FunctionClauseError, reason, caller, response}, printable_limit: :infinity, width: :infinity, limit: :infinity))
-    #    end
-    # end
   end
 end
