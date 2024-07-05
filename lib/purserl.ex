@@ -346,8 +346,7 @@ defmodule DevHelpers.Purserl do
   def handle_cast({:finish_up, result}, state) do
     process_warnings(state)
     print_elapsed(state)
-    reply(state, state.caller, result)
-    {:noreply, state}
+    {:noreply, state |> reply(state.caller, result)}
   end
 
   @impl true
@@ -1877,6 +1876,6 @@ defmodule DevHelpers.Purserl do
 
   defp reply(state, caller, response) do
     caller |> Enum.map(fn c -> GenServer.reply(c, response) end)
-    {:noreply, %{state | caller: []}}
+    %{state | caller: []}
   end
 end
