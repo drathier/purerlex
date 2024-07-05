@@ -71,6 +71,7 @@ defmodule DevHelpers.Purserl do
                 nil
             end
         end,
+      verbose: config |> Keyword.get(:verbose, false),
       build_error_cache: config |> Keyword.get(:build_error_cache, nil),
       tasks: [],
       module_positions: %{},
@@ -179,28 +180,37 @@ defmodule DevHelpers.Purserl do
         nil -> "Purs"
         n when is_integer(n) -> String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))
       end
-    overwrite = label != "Purs"
+    new_line = label != "Purs"
+    offset = rows - pos
     move_up =
-      case overwrite do
-        true -> String.duplicate(Color.cursor_up(), rows - pos)
+      case new_line do
+        true -> String.duplicate(Color.cursor_up(), offset)
         false -> ""
       end
     move_down =
-      case overwrite do
-        true -> String.duplicate(Color.cursor_down(), rows - pos - 1)
+      case new_line do
+        true -> String.duplicate(Color.cursor_down(), offset - 1)
         false -> ""
       end
     clear =
-      case overwrite do
-        true -> Color.clear_line
+      case new_line do
+        true -> Color.clear_line()
         false -> ""
       end
+    # [ 0 of 0 ] SXX Purs Module.Mod
     case :io.rows() do
-      {:ok, n} when n > rows - pos ->
-        # [ 0 of 0 ] SXX Purs Module.Mod
+      # NOTE[em]: When not verbose we should only overwrite a single line with a new modules each time
+      {:ok, _} when not state.verbose and new_line ->
+        IO.write(Color.cursor_up() <> Color.clear_line() <> "#{step_in_brackets} #{s_version} #{label} #{module}\n")
+
+      # NOTE[em]: Verbose prints every module on a new line and updates the line continiously
+      {:ok, n} when state.verbose and n > offset ->
         IO.write(move_up <> clear <> "#{step_in_brackets} #{s_version} #{label} #{module}\n" <> move_down)
-      {:error, :enotsup} when not overwrite ->
+
+      # NOTE[em]: No terminal means we write new modules on the own line
+      {:error, :enotsup} when not new_line ->
         IO.write("#{step_in_brackets} #{s_version} #{label} #{module}\n")
+
       _ ->
         nil
     end
