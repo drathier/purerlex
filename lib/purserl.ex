@@ -180,22 +180,22 @@ defmodule DevHelpers.Purserl do
         nil -> "Purs"
         n when is_integer(n) -> String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))
       end
-    new_line = label != "Purs"
+    new_line = label == "Purs"
     offset = rows - pos
     move_up =
       case new_line do
-        true -> String.duplicate(Color.cursor_up(), offset)
-        false -> ""
+        true -> ""
+        false -> String.duplicate(Color.cursor_up(), offset)
       end
     move_down =
       case new_line do
-        true -> String.duplicate(Color.cursor_down(), offset - 1)
-        false -> ""
+        true -> ""
+        false -> String.duplicate(Color.cursor_down(), offset - 1)
       end
     clear =
       case new_line do
-        true -> Color.clear_line()
-        false -> ""
+        true -> ""
+        false -> Color.clear_line()
       end
     # [ 0 of 0 ] SXX Purs Module.Mod
     case :io.rows() do
@@ -208,7 +208,7 @@ defmodule DevHelpers.Purserl do
         IO.write(move_up <> clear <> "#{step_in_brackets} #{s_version} #{label} #{module}\n" <> move_down)
 
       # NOTE[em]: No terminal means we write new modules on the own line
-      {:error, :enotsup} when not new_line ->
+      {:error, :enotsup} when new_line ->
         IO.write("#{step_in_brackets} #{s_version} #{label} #{module}\n")
 
       _ ->
