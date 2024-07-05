@@ -10,8 +10,10 @@ defmodule DevHelpers.Purserl do
 
   ###
 
+  @name :purserl_compiler
+
   def start(config) do
-    case GenServer.start(__MODULE__, config, name: :purserl_compiler) do
+    case GenServer.start(__MODULE__, config, name: @name) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       res -> res
@@ -71,6 +73,8 @@ defmodule DevHelpers.Purserl do
         end,
       build_error_cache: config |> Keyword.get(:build_error_cache, nil),
       tasks: [],
+      module_positions: %{},
+      erl_steps: %{},
       started_at: nil,
     }
 
@@ -167,12 +171,45 @@ defmodule DevHelpers.Purserl do
     nil
   end
 
+  def print_pretty_status(state, module) do
+    {pos, step_in_brackets, s_version} = state.module_positions[module]
+    rows = :maps.size(state.module_positions)
+    label =
+      case state.erl_steps[module] do
+        nil -> "Purs"
+        n when is_integer(n) -> String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))
+      end
+    overwrite = label != "Purs"
+    move_up =
+      case overwrite do
+        true -> String.duplicate(Color.cursor_up(), rows - pos)
+        false -> ""
+      end
+    move_down =
+      case overwrite do
+        true -> String.duplicate(Color.cursor_down(), rows - pos - 1)
+        false -> ""
+      end
+    clear =
+      case overwrite do
+        true -> Color.clear_line
+        false -> ""
+      end
+    case :io.rows() do
+      {:ok, n} when n > rows - pos ->
+        # [ 0 of 0 ] SXX Purs Module.Mod
+        IO.write(move_up <> clear <> "#{step_in_brackets} #{s_version} #{label} #{module}\n" <> move_down)
+      {:error, :enotsup} when not overwrite ->
+        IO.write("#{step_in_brackets} #{s_version} #{label} #{module}\n")
+      _ ->
+        nil
+    end
+  end
+
   @impl true
   def handle_info({_port, {:data, {:eol, msg}}}, state) do
     # log whenever we get something, if applicable
     log("handle_info", msg, state.logfile)
-
-    start_compile_at = DateTime.utc_now()
 
     cond do
       # spago
@@ -191,33 +228,48 @@ defmodule DevHelpers.Purserl do
         cond do
           msg == "### launching compiler" ->
             IO.puts("Compiling ...")
-            {:noreply, %{ state | started_at: DateTime.utc_now() }}
+            {:noreply, %{ state | started_at: DateTime.utc_now(), module_positions: %{}, erl_steps: %{} }}
 
           msg == "### read externs" ->
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 0") ->
-            await_tasks(state)
-            process_warnings(state, start_compile_at)
-            print_elapsed(state)
-            reply(state, state.caller, :ok)
+            state = await_tasks(state)
+            GenServer.cast(@name, {:finish_up, :ok})
+            {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 1") ->
-            await_tasks(state)
-            process_warnings(state, start_compile_at)
-            print_elapsed(state)
-            reply(state, state.caller, :err)
+            state = await_tasks(state)
+            GenServer.cast(@name, {:finish_up, :err})
+            {:noreply, state}
 
           msg |> String.starts_with?("### erl-same:") ->
+
+            "### erl-same:" <> path_to_changed_file = msg
+            case path_to_changed_file |> String.split("/") do
+              ["output", module | _ ] ->
+                GenServer.cast(@name, {:erl_step_complete, module})
+              _ -> nil
+            end
+
             {:noreply, state}
 
           msg |> String.starts_with?("### erl-diff:") ->
-            ["", path_to_changed_file] = msg |> String.split("### erl-diff:", parts: 2)
+
+            "### erl-diff:" <> path_to_changed_file = msg
+
+            module_name =
+              case path_to_changed_file |> String.split("/") do
+                ["output", module | _ ] ->
+                  module
+                _ ->
+                  nil
+              end
 
             # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
             state = cond do
               path_to_changed_file |> String.ends_with?(".erl") ->
-                %{ state | tasks: [spawn_link(__MODULE__, :compile_erlang, [path_to_changed_file, state.logfile])|state.tasks] }
+                %{ state | tasks: [spawn_link(__MODULE__, :compile_erlang, [path_to_changed_file, module_name, state.logfile])|state.tasks] }
 
               true ->
                 state
@@ -234,7 +286,7 @@ defmodule DevHelpers.Purserl do
         case Jason.decode(msg) do
           {:ok, v} ->
             # yes, now do stuff with it
-            process_warnings(state, start_compile_at, v["warnings"], v["errors"], :wip)
+            process_warnings(state, DateTime.utc_now(), v["warnings"], v["errors"], :wip)
 
             {:noreply, state}
 
@@ -242,13 +294,13 @@ defmodule DevHelpers.Purserl do
             # nope, is it a "[123 of 456] Compiling ..." line?
             cond do
               msg |> String.contains?(" Compiling ") ->
-                # NOTE[drathier]: this eats the last line before this runs. We're printing the "Compiling ..." message when the compiler launches explicitly so that this line has something to eat. Erlang compiler warnings are sometimes eaten by this too, so it's not a perfect solution.
-                IO.puts(Color.cursor_up() <> Color.clear_line() <> "\r" <> msg)
-                # IO.puts("\n" <> msg)
-
                 # [ 848 of 1058] Compiling S64 Lesslie.Fortnox.Streams.Storage
-                [_, a] = msg |> String.split(" Compiling ", parts: 2)
-                [_s_version, module] = a |> String.split(" ", parts: 2)
+                [step_in_brackets, v_and_mod] = msg |> String.split(" Compiling ", parts: 2)
+                [s_version, module] = v_and_mod |> String.split(" ", parts: 2)
+
+                module_info = {:maps.size(state.module_positions), step_in_brackets, s_version}
+                state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info)}
+                print_pretty_status(state, module)
 
                 # IO.inspect {:s_version, s_version, :module, module}
 
@@ -273,6 +325,19 @@ defmodule DevHelpers.Purserl do
     msg = "Purs exited unexpectedly with code #{exit_status}"
     IO.puts(msg)
     {:stop, msg, state}
+  end
+
+  @impl true
+  def handle_cast({:erl_step_complete, module}, state) do
+    state = %{ state | erl_steps: state.erl_steps |> Map.put(module, 1 + (state.erl_steps[module] || 0)) }
+    print_pretty_status(state, module)
+    {:noreply, state}
+  end
+  def handle_cast({:finish_up, result}, state) do
+    process_warnings(state)
+    print_elapsed(state)
+    reply(state, state.caller, result)
+    {:noreply, state}
   end
 
   @impl true
@@ -334,8 +399,9 @@ defmodule DevHelpers.Purserl do
   ###
 
   # Compiles and loads an Erlang source file, returns {module, binary}
-  def compile_erlang(source, logfile, retries \\ 0) do
+  def compile_erlang(source, module_name, logfile, retries \\ 0) do
     log("compile_erlang", {source, retries}, logfile)
+
     source = Path.relative_to_cwd(source) |> String.to_charlist()
 
     # st = DateTime.utc_now()
@@ -370,7 +436,7 @@ defmodule DevHelpers.Purserl do
             Process.sleep(sleep_time)
 
             # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
-            compile_erlang(source, logfile, retries + 1)
+            compile_erlang(source, module_name, logfile, retries + 1)
 
           true ->
             IO.puts("#############################################################################")
@@ -381,6 +447,11 @@ defmodule DevHelpers.Purserl do
         end
     end
     # IO.inspect({DateTime.diff(DateTime.utc_now(), st, :millisecond), source})
+
+    case module_name do
+      nil -> nil
+      _ -> GenServer.cast(@name, {:erl_step_complete, module_name})
+    end
   end
 
   def extract_purs_cmd(line) do
@@ -518,7 +589,7 @@ defmodule DevHelpers.Purserl do
     String.trim(output)
   end
 
-  def process_warnings(state, start_compile_at), do: process_warnings(state, start_compile_at, [], [], :done)
+  def process_warnings(state), do: process_warnings(state, DateTime.utc_now(), [], [], :done)
   def process_warnings(state, start_compile_at, warnings, errors, done_or_wip) do
     things =
       (errors
