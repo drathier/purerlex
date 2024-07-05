@@ -71,7 +71,6 @@ defmodule DevHelpers.Purserl do
                 nil
             end
         end,
-      verbose: config |> Keyword.get(:verbose, false),
       build_error_cache: config |> Keyword.get(:build_error_cache, nil),
       tasks: [],
       module_positions: %{},
@@ -197,6 +196,9 @@ defmodule DevHelpers.Purserl do
         true -> ""
         false -> Color.clear_line()
       end
+
+    verbose = not Enum.member?(["", "0", "false"], System.get_env("PURERLEX_VERBOSE", ""))
+
     # [ 0 of 0 ] SXX Purs Module.Mod
     case :io.rows() do
       # NOTE[em]: When not verbose we should only overwrite a single line with a new modules each time
