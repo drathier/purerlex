@@ -206,11 +206,11 @@ defmodule DevHelpers.Purserl do
       {:ok, _} when not verbose and new_line ->
         IO.write([Color.cursor_up(), Color.clear_line(), step_in_brackets, " ", s_version, " ", label, " ", module, "\n"])
 
-      # NOTE[em]: Verbose prints every module on a new line and updates the line continiously
+      # NOTE[em]: Verbose prints every module on a new line and updates the line continuously
       {:ok, n} when verbose and n > offset ->
         IO.write([move_up, clear, step_in_brackets, " ", s_version, " ", label, " ", module, "\n", move_down])
 
-      # NOTE[em]: No terminal means we write new modules on the own line
+      # NOTE[em]: No terminal means we write new modules on their own line
       {:error, :enotsup} when new_line ->
         IO.write([step_in_brackets, " ", s_version, " ", label, " ", module, "\n"])
 
