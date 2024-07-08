@@ -174,12 +174,13 @@ defmodule DevHelpers.Purserl do
   def print_pretty_status(state, module) do
     {pos, step_in_brackets, s_version} = state.module_positions[module]
     rows = :maps.size(state.module_positions)
-    label =
+    {new_line, label} =
       case state.erl_steps[module] do
-        nil -> "Purs"
-        n when is_integer(n) -> String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))
+        nil ->
+          {true, Color.format([:yellow, "Purs"])}
+        n when is_integer(n) ->
+          {false, Color.format([:green, String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))])}
       end
-    new_line = label == "Purs"
     offset = rows - pos
     move_up =
       case new_line do
@@ -202,16 +203,16 @@ defmodule DevHelpers.Purserl do
     # [ 0 of 0 ] SXX Purs Module.Mod
     case :io.rows() do
       # NOTE[em]: When not verbose we should only overwrite a single line with a new modules each time
-      {:ok, _} when not state.verbose and new_line ->
-        IO.write(Color.cursor_up() <> Color.clear_line() <> "#{step_in_brackets} #{s_version} #{label} #{module}\n")
+      {:ok, _} when not verbose and new_line ->
+        IO.write([Color.cursor_up(), Color.clear_line(), step_in_brackets, " ", s_version, " ", label, " ", module, "\n"])
 
       # NOTE[em]: Verbose prints every module on a new line and updates the line continiously
-      {:ok, n} when state.verbose and n > offset ->
-        IO.write(move_up <> clear <> "#{step_in_brackets} #{s_version} #{label} #{module}\n" <> move_down)
+      {:ok, n} when verbose and n > offset ->
+        IO.write([move_up, clear, step_in_brackets, " ", s_version, " ", label, " ", module, "\n", move_down])
 
       # NOTE[em]: No terminal means we write new modules on the own line
       {:error, :enotsup} when new_line ->
-        IO.write("#{step_in_brackets} #{s_version} #{label} #{module}\n")
+        IO.write([step_in_brackets, " ", s_version, " ", label, " ", module, "\n"])
 
       _ ->
         nil
