@@ -178,6 +178,8 @@ defmodule DevHelpers.Purserl do
       case state.erl_steps[module] do
         nil ->
           {true, Color.format([:yellow, "Purs"])}
+        :error ->
+          {false, Color.format([:red, "Err "])}
         n when is_integer(n) ->
           {false, Color.format([:green, String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))])}
       end
@@ -301,6 +303,9 @@ defmodule DevHelpers.Purserl do
             # yes, now do stuff with it
             process_warnings(state, v["warnings"], v["errors"], :wip)
 
+            v["errors"]
+            |> Enum.map(fn %{"moduleName" => mod} -> GenServer.cast(@name, {:got_error, mod}) end)
+
             {:noreply, state}
 
           {:error, _} ->
@@ -343,6 +348,17 @@ defmodule DevHelpers.Purserl do
   @impl true
   def handle_cast({:erl_step_complete, module}, state) do
     state = %{ state | erl_steps: state.erl_steps |> Map.put(module, 1 + (state.erl_steps[module] || 0)) }
+    print_pretty_status(state, module)
+    {:noreply, state}
+  end
+
+  # NOTE[em]: For some reason we can get errors which aren't in a module?? This
+  # has happened when trying to import somthing from a file which doesn't exist.
+  # `import A (b)` <- If b doesn't exist.
+  def handle_cast({:got_error, nil}, state), do: {:noreply, state}
+  def handle_cast({:got_error, module}, state) do
+    # HACK[em]: We are using erl_steps here for purs error handling. It works surprisingly well though...
+    state = %{ state | erl_steps: state.erl_steps |> Map.put(module, :error) }
     print_pretty_status(state, module)
     {:noreply, state}
   end
