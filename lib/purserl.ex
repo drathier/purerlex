@@ -299,7 +299,7 @@ defmodule DevHelpers.Purserl do
         case Jason.decode(msg) do
           {:ok, v} ->
             # yes, now do stuff with it
-            process_warnings(state, DateTime.utc_now(), v["warnings"], v["errors"], :wip)
+            process_warnings(state, v["warnings"], v["errors"], :wip)
 
             {:noreply, state}
 
@@ -601,16 +601,16 @@ defmodule DevHelpers.Purserl do
     String.trim(output)
   end
 
-  def process_warnings(state), do: process_warnings(state, DateTime.utc_now(), [], [], :done)
-  def process_warnings(state, start_compile_at, warnings, errors, done_or_wip) do
+  def process_warnings(state), do: process_warnings(state, [], [], :done)
+  def process_warnings(state, warnings, errors, done_or_wip) do
     things =
       (errors
        |> Enum.map(fn x ->
-         x |> Map.put(:kind, :error) |> Map.put(:start_compile_at, start_compile_at)
+         x |> Map.put(:kind, :error) |> Map.put(:start_compile_at, state.started_at)
        end)) ++
         (warnings
          |> Enum.map(fn x ->
-           x |> Map.put(:kind, :warning) |> Map.put(:start_compile_at, start_compile_at)
+           x |> Map.put(:kind, :warning) |> Map.put(:start_compile_at, state.started_at)
          end))
 
     things2 = cache(state.logfile, state.build_error_cache, things)
