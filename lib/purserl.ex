@@ -177,7 +177,13 @@ defmodule DevHelpers.Purserl do
   end
 
   def print_pretty_status(state, module) do
-    {pos, step_in_brackets, s_version} = state.module_positions[module]
+    # NOTE[em]: Sometimes we get errors before a module has started to compile
+    case state.module_positions[module] do
+      {_, _, _} = args -> print_pretty_status(state, args, module)
+      nil -> nil
+    end
+  end
+  def print_pretty_status(state, {pos, step_in_brackets, s_version}, module) do
     rows = :maps.size(state.module_positions)
     {new_line, label} =
       case state.erl_steps[module] do
