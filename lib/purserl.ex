@@ -103,6 +103,16 @@ defmodule Purserl do
     GenServer.call(__MODULE__, :compile_times)
   end
 
+  def durations() do
+    compile_times()
+    |> Enum.map(fn {module, %{start: s, end: e}} -> {module, DateTime.diff(e, s, :milliseconds)} end)
+    |> Enum.into(%{})
+  end
+
+  def durations_dump() do
+    File.write("durations.json", durations() |> Jason.encode!())
+  end
+
   def start_spago(state) do
     # NOTE[fh]: cmd has to be charlist strings ('qwe'), not binary strings ("qwe")
     cmd = 'spago build --purs-args \"--codegen erl\" -v --no-psa'
@@ -252,8 +262,11 @@ defmodule Purserl do
         cond do
           msg == "### launching compiler" ->
             IO.puts("Compiling ...")
+            # NOTE[em]: We don't reset compile times here in order to update
+            # them incrementally with new recompiles
             {:noreply, %{ state | started_at: DateTime.utc_now(),
-                                  module_positions: %{}, erl_steps: %{}, compile_times: %{} }}
+                                  module_positions: %{},
+                                  erl_steps: %{} }}
 
           msg == "### read externs" ->
             {:noreply, state}
@@ -271,13 +284,16 @@ defmodule Purserl do
           msg |> String.starts_with?("### erl-same:") ->
 
             "### erl-same:" <> path_to_changed_file = msg
-            case path_to_changed_file |> String.split("/") do
-              ["output", module | _ ] ->
-                GenServer.cast(__MODULE__, {:erl_step_complete, module})
-              _ -> nil
-            end
+            module_name =
+              case path_to_changed_file |> String.split("/") do
+                ["output", module | _ ] ->
+                  GenServer.cast(__MODULE__, {:erl_step_complete, module})
+                  module
+                _ ->
+                  nil
+              end
 
-            {:noreply, state}
+            {:noreply, state |> complete_purs_module(module_name)}
 
           msg |> String.starts_with?("### erl-diff:") ->
 
@@ -300,7 +316,7 @@ defmodule Purserl do
                 state
             end
 
-            {:noreply, state}
+            {:noreply, state |> complete_purs_module(module_name)}
 
           true ->
             {:noreply, state}
@@ -328,7 +344,7 @@ defmodule Purserl do
 
                 module_info = {:maps.size(state.module_positions), step_in_brackets, s_version}
                 state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info),
-                                   compile_times: state.compile_times |> Map.put(module, [ DateTime.utc_now() ])}
+                                   compile_times: state.compile_times |> Map.put(module, %{ start: DateTime.utc_now(), end: nil, erl: [] })}
                 print_pretty_status(state, module)
 
                 # IO.inspect {:s_version, s_version, :module, module}
@@ -356,10 +372,34 @@ defmodule Purserl do
     {:stop, msg, state}
   end
 
+  defp complete_purs_module(state, nil), do: state
+  defp complete_purs_module(state, module) do
+    %{ state |
+        compile_times:
+          state.compile_times
+          |> Map.update(module, "err module was not compiled",
+          fn times ->
+            times
+            |> Map.update(:end, nil,
+              fn v ->
+                case v do
+                  nil -> DateTime.utc_now()
+                  _ -> v
+                end
+              end)
+          end)
+    }
+  end
+
   @impl true
   def handle_cast({:erl_step_complete, module}, state) do
-    state = %{ state | erl_steps: state.erl_steps |> Map.put(module, 1 + (state.erl_steps[module] || 0)),
-                       compile_times: state.compile_times |> Map.update(module, [ DateTime.utc_now() ], fn x -> x ++ [ DateTime.utc_now() ] end) }
+    state = %{ state |
+      erl_steps:
+        state.erl_steps
+        |> Map.put(module, 1 + (state.erl_steps[module] || 0)),
+     compile_times:
+       state.compile_times
+       |> Map.update(module, "err module was not compiled", fn times -> times |> Map.update(:erl, [], fn l -> [DateTime.utc_now()|l] end) end) }
     print_pretty_status(state, module)
     {:noreply, state}
   end
