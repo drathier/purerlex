@@ -1,4 +1,4 @@
-defmodule DevHelpers.Purserl do
+defmodule Purserl do
   use GenServer
   alias IO.ANSI, as: Color
 
@@ -10,10 +10,8 @@ defmodule DevHelpers.Purserl do
 
   ###
 
-  @name :purserl_compiler
-
   def start(config) do
-    case GenServer.start(__MODULE__, config, name: @name) do
+    case GenServer.start(__MODULE__, config, name: __MODULE__) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       res -> res
@@ -102,7 +100,7 @@ defmodule DevHelpers.Purserl do
   end
 
   def compile_times() do
-    GenServer.call(@name, :compile_times)
+    GenServer.call(__MODULE__, :compile_times)
   end
 
   def start_spago(state) do
@@ -262,12 +260,12 @@ defmodule DevHelpers.Purserl do
 
           msg |> String.starts_with?("### done compiler: 0") ->
             state = await_tasks(state)
-            GenServer.cast(@name, {:finish_up, :ok})
+            GenServer.cast(__MODULE__, {:finish_up, :ok})
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 1") ->
             state = await_tasks(state)
-            GenServer.cast(@name, {:finish_up, :err})
+            GenServer.cast(__MODULE__, {:finish_up, :err})
             {:noreply, state}
 
           msg |> String.starts_with?("### erl-same:") ->
@@ -275,7 +273,7 @@ defmodule DevHelpers.Purserl do
             "### erl-same:" <> path_to_changed_file = msg
             case path_to_changed_file |> String.split("/") do
               ["output", module | _ ] ->
-                GenServer.cast(@name, {:erl_step_complete, module})
+                GenServer.cast(__MODULE__, {:erl_step_complete, module})
               _ -> nil
             end
 
@@ -316,7 +314,7 @@ defmodule DevHelpers.Purserl do
             process_warnings(state, v["warnings"], v["errors"], :wip)
 
             v["errors"]
-            |> Enum.map(fn %{"moduleName" => mod} -> GenServer.cast(@name, {:got_error, mod}) end)
+            |> Enum.map(fn %{"moduleName" => mod} -> GenServer.cast(__MODULE__, {:got_error, mod}) end)
 
             {:noreply, state}
 
@@ -496,7 +494,7 @@ defmodule DevHelpers.Purserl do
 
     case module_name do
       nil -> nil
-      _ -> GenServer.cast(@name, {:erl_step_complete, module_name})
+      _ -> GenServer.cast(__MODULE__, {:erl_step_complete, module_name})
     end
   end
 
