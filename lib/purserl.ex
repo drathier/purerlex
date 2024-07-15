@@ -254,8 +254,8 @@ defmodule DevHelpers.Purserl do
         cond do
           msg == "### launching compiler" ->
             IO.puts("Compiling ...")
-            {:noreply, %{ state | started_at: DateTime.utc_now() \
-                                , module_positions: %{}, erl_steps: %{}, compile_times: %{} }}
+            {:noreply, %{ state | started_at: DateTime.utc_now(),
+                                  module_positions: %{}, erl_steps: %{}, compile_times: %{} }}
 
           msg == "### read externs" ->
             {:noreply, state}
@@ -329,8 +329,8 @@ defmodule DevHelpers.Purserl do
                 [s_version, module] = v_and_mod |> String.split(" ", parts: 2)
 
                 module_info = {:maps.size(state.module_positions), step_in_brackets, s_version}
-                state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info) \
-                                 , compile_times: state.compile_times |> Map.put(module, [ DateTime.utc_now() ])}
+                state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info),
+                                   compile_times: state.compile_times |> Map.put(module, [ DateTime.utc_now() ])}
                 print_pretty_status(state, module)
 
                 # IO.inspect {:s_version, s_version, :module, module}
@@ -360,8 +360,8 @@ defmodule DevHelpers.Purserl do
 
   @impl true
   def handle_cast({:erl_step_complete, module}, state) do
-    state = %{ state | erl_steps: state.erl_steps |> Map.put(module, 1 + (state.erl_steps[module] || 0)) \
-                     , compile_times: state.compile_times |> Map.update(module, [ DateTime.utc_now() ], fn x -> x ++ [ DateTime.utc_now() ] end) }
+    state = %{ state | erl_steps: state.erl_steps |> Map.put(module, 1 + (state.erl_steps[module] || 0)),
+                       compile_times: state.compile_times |> Map.update(module, [ DateTime.utc_now() ], fn x -> x ++ [ DateTime.utc_now() ] end) }
     print_pretty_status(state, module)
     {:noreply, state}
   end
