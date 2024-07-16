@@ -41,7 +41,6 @@ defmodule Purserl do
       purs_args: config |> Keyword.get(:purs_args, ""),
       ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
       ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).(),
-      single_line_compile_output: config |> Keyword.get(:single_line_compile_output, false),
       logfile:
         case config |> Keyword.get(:logfile_path, nil) do
           nil ->
