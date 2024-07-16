@@ -1,4 +1,4 @@
-defmodule DevHelpers.Purserl do
+defmodule Purserl do
   use GenServer
   alias IO.ANSI, as: Color
 
@@ -10,10 +10,8 @@ defmodule DevHelpers.Purserl do
 
   ###
 
-  @name :purserl_compiler
-
   def start(config) do
-    case GenServer.start(__MODULE__, config, name: @name) do
+    case GenServer.start(__MODULE__, config, name: __MODULE__) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
       res -> res
@@ -43,7 +41,6 @@ defmodule DevHelpers.Purserl do
       purs_args: config |> Keyword.get(:purs_args, ""),
       ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
       ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).(),
-      single_line_compile_output: config |> Keyword.get(:single_line_compile_output, false),
       logfile:
         case config |> Keyword.get(:logfile_path, nil) do
           nil ->
@@ -102,7 +99,17 @@ defmodule DevHelpers.Purserl do
   end
 
   def compile_times() do
-    GenServer.call(@name, :compile_times)
+    GenServer.call(__MODULE__, :compile_times)
+  end
+
+  def durations() do
+    compile_times()
+    |> Enum.map(fn {module, %{start: s, end: e}} -> {module, DateTime.diff(e, s, :millisecond)} end)
+    |> Enum.into(%{})
+  end
+
+  def durations_dump() do
+    File.write("durations.json", durations() |> Jason.encode!())
   end
 
   def start_spago(state) do
@@ -254,32 +261,38 @@ defmodule DevHelpers.Purserl do
         cond do
           msg == "### launching compiler" ->
             IO.puts("Compiling ...")
-            {:noreply, %{ state | started_at: DateTime.utc_now() \
-                                , module_positions: %{}, erl_steps: %{}, compile_times: %{} }}
+            # NOTE[em]: We don't reset compile times here in order to update
+            # them incrementally with new recompiles
+            {:noreply, %{ state | started_at: DateTime.utc_now(),
+                                  module_positions: %{},
+                                  erl_steps: %{} }}
 
           msg == "### read externs" ->
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 0") ->
             state = await_tasks(state)
-            GenServer.cast(@name, {:finish_up, :ok})
+            GenServer.cast(__MODULE__, {:finish_up, :ok})
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 1") ->
             state = await_tasks(state)
-            GenServer.cast(@name, {:finish_up, :err})
+            GenServer.cast(__MODULE__, {:finish_up, :err})
             {:noreply, state}
 
           msg |> String.starts_with?("### erl-same:") ->
 
             "### erl-same:" <> path_to_changed_file = msg
-            case path_to_changed_file |> String.split("/") do
-              ["output", module | _ ] ->
-                GenServer.cast(@name, {:erl_step_complete, module})
-              _ -> nil
-            end
+            module_name =
+              case path_to_changed_file |> String.split("/") do
+                ["output", module | _ ] ->
+                  GenServer.cast(__MODULE__, {:erl_step_complete, module})
+                  module
+                _ ->
+                  nil
+              end
 
-            {:noreply, state}
+            {:noreply, state |> complete_purs_module(module_name)}
 
           msg |> String.starts_with?("### erl-diff:") ->
 
@@ -302,7 +315,7 @@ defmodule DevHelpers.Purserl do
                 state
             end
 
-            {:noreply, state}
+            {:noreply, state |> complete_purs_module(module_name)}
 
           true ->
             {:noreply, state}
@@ -316,7 +329,7 @@ defmodule DevHelpers.Purserl do
             process_warnings(state, v["warnings"], v["errors"], :wip)
 
             v["errors"]
-            |> Enum.map(fn %{"moduleName" => mod} -> GenServer.cast(@name, {:got_error, mod}) end)
+            |> Enum.map(fn %{"moduleName" => mod} -> GenServer.cast(__MODULE__, {:got_error, mod}) end)
 
             {:noreply, state}
 
@@ -329,8 +342,8 @@ defmodule DevHelpers.Purserl do
                 [s_version, module] = v_and_mod |> String.split(" ", parts: 2)
 
                 module_info = {:maps.size(state.module_positions), step_in_brackets, s_version}
-                state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info) \
-                                 , compile_times: state.compile_times |> Map.put(module, [ DateTime.utc_now() ])}
+                state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info),
+                                   compile_times: state.compile_times |> Map.put(module, %{ start: DateTime.utc_now(), end: nil, erl: [] })}
                 print_pretty_status(state, module)
 
                 # IO.inspect {:s_version, s_version, :module, module}
@@ -358,10 +371,34 @@ defmodule DevHelpers.Purserl do
     {:stop, msg, state}
   end
 
+  defp complete_purs_module(state, nil), do: state
+  defp complete_purs_module(state, module) do
+    %{ state |
+        compile_times:
+          state.compile_times
+          |> Map.update(module, "err module was not compiled",
+          fn times ->
+            times
+            |> Map.update(:end, nil,
+              fn v ->
+                case v do
+                  nil -> DateTime.utc_now()
+                  _ -> v
+                end
+              end)
+          end)
+    }
+  end
+
   @impl true
   def handle_cast({:erl_step_complete, module}, state) do
-    state = %{ state | erl_steps: state.erl_steps |> Map.put(module, 1 + (state.erl_steps[module] || 0)) \
-                     , compile_times: state.compile_times |> Map.update(module, [ DateTime.utc_now() ], fn x -> x ++ [ DateTime.utc_now() ] end) }
+    state = %{ state |
+      erl_steps:
+        state.erl_steps
+        |> Map.put(module, 1 + (state.erl_steps[module] || 0)),
+     compile_times:
+       state.compile_times
+       |> Map.update(module, "err module was not compiled", fn times -> times |> Map.update(:erl, [], fn l -> [DateTime.utc_now()|l] end) end) }
     print_pretty_status(state, module)
     {:noreply, state}
   end
@@ -496,7 +533,7 @@ defmodule DevHelpers.Purserl do
 
     case module_name do
       nil -> nil
-      _ -> GenServer.cast(@name, {:erl_step_complete, module_name})
+      _ -> GenServer.cast(__MODULE__, {:erl_step_complete, module_name})
     end
   end
 

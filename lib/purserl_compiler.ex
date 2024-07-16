@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Compile.Purserl do
 
   use Mix.Task.Compiler
 
-  alias DevHelpers.Purserl, as: P
+  alias Purserl, as: P
 
   @recursive true
 
