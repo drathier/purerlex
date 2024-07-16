@@ -104,7 +104,7 @@ defmodule Purserl do
 
   def durations() do
     compile_times()
-    |> Enum.map(fn {module, %{start: s, end: e}} -> {module, DateTime.diff(e, s, :milliseconds)} end)
+    |> Enum.map(fn {module, %{start: s, end: e}} -> {module, DateTime.diff(e, s, :millisecond)} end)
     |> Enum.into(%{})
   end
 
