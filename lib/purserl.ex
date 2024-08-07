@@ -488,7 +488,7 @@ defmodule Purserl do
     source = Path.relative_to_cwd(source) |> String.to_charlist()
 
     # st = DateTime.utc_now()
-    case :compile.file(source, [:binary, :return_warnings]) do
+    case :compile.file(source, [:binary, :return_warnings, :return_errors]) do
       {:ok, module, binary, warnings} ->
         # write newly compiled file to disk as beam file
         base = source |> Path.basename() |> Path.rootname()
@@ -518,13 +518,16 @@ defmodule Purserl do
             sleep_time = retries * 100
             Process.sleep(sleep_time)
 
-            # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
+            IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
             compile_erlang(source, module_name, logfile, retries + 1)
 
           true ->
-            IO.puts("#############################################################################")
-            IO.puts("####### Erl compiler failed to run; something has gone terribly wrong #######")
-            IO.puts("#############################################################################")
+            IO.puts("##########################################################")
+            IO.puts("####### Erl compiler failed to run; se error below #######")
+            IO.puts("##########################################################")
+            IO.puts("Source: #{inspect_full(source)}")
+            IO.puts("Retries: #{inspect_full(retries)}")
+            IO.puts("Err: #{inspect_full(err)}")
 
             raise CompileError
         end
@@ -535,6 +538,10 @@ defmodule Purserl do
       nil -> nil
       _ -> GenServer.cast(__MODULE__, {:erl_step_complete, module_name})
     end
+  end
+
+  def inspect_full(contents, opts \\ []) do
+    inspect(contents, [width: :infinity, printable_limit: :infinity, limit: :infinity] ++ opts)
   end
 
   def extract_purs_cmd(line) do
