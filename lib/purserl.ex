@@ -518,7 +518,7 @@ defmodule Purserl do
             sleep_time = retries * 100
             Process.sleep(sleep_time)
 
-            IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
+            # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
             compile_erlang(source, module_name, logfile, retries + 1)
 
           true ->
