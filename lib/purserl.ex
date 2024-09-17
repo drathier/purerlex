@@ -192,14 +192,14 @@ defmodule Purserl do
   end
   def print_pretty_status(state, {pos, step_in_brackets, s_version}, module) do
     rows = :maps.size(state.module_positions)
-    {new_line, label} =
+    {new_line, color, label} =
       case state.erl_steps[module] do
         nil ->
-          {true, Color.format([:yellow, "Purs"])}
+          {true, :yellow, "Purs"}
         :error ->
-          {false, Color.format([:red, "Err "])}
+          {false, :red, "Err "}
         n when is_integer(n) ->
-          {false, Color.format([:green, String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))])}
+          {false, :green, String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))}
       end
     offset = rows - pos
     move_up =
@@ -220,20 +220,44 @@ defmodule Purserl do
 
     verbose = not Enum.member?(["", "0", "false"], System.get_env("PURERLEX_VERBOSE", ""))
 
+    max_length =
+        case :io.columns() do
+          {:ok, cols} -> cols
+          {:error, :enotsup} -> 10000
+        end
+
+    # NOTE[em]: It is a bit complex to calculate what should be output since
+    # the IO device may shrink and we also need to color some parts. Colors
+    # don't take up IO device width.
+    output_row =
+      [step_in_brackets, " ", s_version, " ", label, " ", module]
+      |> Enum.reduce({max_length, []}, fn s, {remaining, acc} ->
+        sliced = String.slice(s, 0, remaining)
+        out =
+          case s do
+            ^label -> Color.format([color, sliced])
+            _ -> sliced
+          end
+        {remaining - String.length(sliced), [out | acc]}
+      end)
+      |> elem(1)
+      |> Enum.reverse()
+
     # [ 0 of 0 ] SXX Purs Module.Mod
     case :io.rows() do
       # NOTE[em]: When not verbose we should only overwrite a single line with a new modules each time
       {:ok, _} when not verbose and new_line ->
-        IO.write([Color.cursor_up(), Color.clear_line(), step_in_brackets, " ", s_version, " ", label, " ", module, "\n"])
+        IO.write([Color.cursor_up(), Color.clear_line(), output_row, "\n"])
 
       # NOTE[em]: Verbose prints every module on a new line and updates the line continuously
       {:ok, n} when verbose and n > offset ->
-        IO.write([move_up, clear, step_in_brackets, " ", s_version, " ", label, " ", module, "\n", move_down])
+        IO.write([move_up, clear, output_row, "\n", move_down])
 
       # NOTE[em]: No terminal means we write new modules on their own line
       {:error, :enotsup} when new_line ->
-        IO.write([step_in_brackets, " ", s_version, " ", label, " ", module, "\n"])
+        IO.write([output_row, "\n"])
 
+      # NOTE[em]: It is possible to end up here if a row outside the screen needed to be updated
       _ ->
         nil
     end
