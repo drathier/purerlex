@@ -488,7 +488,7 @@ defmodule Purserl do
     source = Path.relative_to_cwd(source) |> String.to_charlist()
 
     # st = DateTime.utc_now()
-    case :compile.file(source, [:binary, :return_warnings, :return_errors]) do
+    case :compile.file(source, [:binary, :debug_info, :return_warnings, :return_errors]) do
       {:ok, module, binary, warnings} ->
         # write newly compiled file to disk as beam file
         base = source |> Path.basename() |> Path.rootname()
