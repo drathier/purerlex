@@ -19,7 +19,7 @@ defmodule Purserl do
   end
 
   def env_variables() do
-    [{'PURS_LOOP_EVERY_SECOND', '1'}, {'PURS_FORCE_COLOR', '1'}]
+    [{~c"PURS_LOOP_EVERY_SECOND", ~c"1"}, {~c"PURS_FORCE_COLOR", ~c"1"}]
   end
 
   @impl true
@@ -113,8 +113,9 @@ defmodule Purserl do
   end
 
   def start_spago(state) do
-    # NOTE[fh]: cmd has to be charlist strings ('qwe'), not binary strings ("qwe")
-    cmd = 'spago build --purs-args \"--codegen erl\" -v --no-psa'
+    # NOTE[fh]: cmd has to be charlist strings (~c"qwe"), not binary strings ("qwe")
+    # NOTE[em]: I used regular strings without problems, not sure if this comment is factual
+    cmd = ~c"spago build --purs-args \"--codegen erl\" -v --no-psa"
 
     port =
       port_open(
@@ -123,7 +124,7 @@ defmodule Purserl do
           :binary,
           :exit_status,
           :stderr_to_stdout,
-          {:env, [{'PURS_LOOP_EVERY_SECOND', '0'}]},
+          {:env, [{~c"PURS_LOOP_EVERY_SECOND", ~c"0"}]},
           {:line, 999_999_999}
         ],
         state
@@ -458,7 +459,7 @@ defmodule Purserl do
     case state.caller do
       [] ->
         # NOTE[em]: This is what triggers the compiler
-        _ = port_command(state.port, 'sdf\n', [], state)
+        _ = port_command(state.port, ~c"sdf\n", [], state)
 
       _ ->
         # IO.puts(inspect({"[purerlex]: skipping duplicate concurrent recompile", from, state.caller}, width: 2000))
@@ -937,7 +938,7 @@ defmodule Purserl do
     case inp do
       %{
         # "allSpans" => [
-        #  %{"end" => '$\f', "name" => "lib/Shell.purs", "start" => [36, 1]}
+        #  %{"end" => ~c"$\f", "name" => "lib/Shell.purs", "start" => [36, 1]}
         # ],
         :file_contents_before => old_content,
         "allSpans" => all_spans,
