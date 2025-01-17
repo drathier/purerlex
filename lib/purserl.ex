@@ -72,7 +72,7 @@ defmodule Purserl do
                 nil
             end
         end,
-      build_error_cache: config |> Keyword.get(:build_error_cache, nil),
+      build_error_cache_path: config |> Keyword.get(:build_error_cache, nil),
       build_cache_path: config |> Keyword.get(:build_cache, nil),
       build_cache: nil,
       available_modules: %{},
@@ -377,7 +377,7 @@ defmodule Purserl do
 
                 # IO.inspect {:s_version, s_version, :module, module}
 
-                del_cache(state.logfile, state.build_error_cache, module)
+                del_cache(state.logfile, state.build_error_cache_path, module)
 
                 {:noreply, state}
 
@@ -466,6 +466,7 @@ defmodule Purserl do
       |> update_beam_bashes()
       |> save_build_cache()
     process_warnings(state)
+    strip_errors(state)
     print_elapsed(state)
     {:noreply, state |> reply(state.caller, result)}
   end
@@ -498,6 +499,20 @@ defmodule Purserl do
           end,
           state.build_cache)
     }
+  end
+
+  def strip_errors(state) do
+    stripped =
+      load_warning_cache(state.logfile, state.build_error_cache_path)
+        |> Enum.map(fn {m, l} ->
+          case l |> Enum.any?(fn thing -> thing.kind === :error end) do
+            true -> purge_erl_and_beam(m)
+            false -> nil
+          end
+          {m, l |> Enum.filter(fn thing -> thing.kind !== :error end)}
+        end)
+        |> Enum.into(%{})
+    store_warning_cache(state.build_error_cache_path, stripped)
   end
 
   defp save_build_cache(state) do
@@ -563,7 +578,7 @@ defmodule Purserl do
       [] ->
         nil
       to_purge ->
-        IO.puts("Purging #{length(to_purge)} module(s)...")
+        # IO.puts("Purging #{length(to_purge)} module(s)...")
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
 
@@ -831,7 +846,7 @@ defmodule Purserl do
   end
 
   def warnings_to_string(state) do
-    things = load_warning_cache(state.logfile, state.build_error_cache)
+    things = load_warning_cache(state.logfile, state.build_error_cache_path)
              |> Map.values()
              |> Enum.reduce([], fn a, b -> a ++ b end)
              |> Enum.uniq() # |> IO.inspect(label: "things3")
@@ -854,16 +869,18 @@ defmodule Purserl do
            x |> Map.put(:kind, :warning) |> Map.put(:start_compile_at, state.started_at)
          end))
 
-    things2 = cache(state.logfile, state.build_error_cache, things)
-    # |> IO.inspect(label: "things3")
-    things3 = things2 |> Map.values() |> Enum.reduce([], fn a, b -> a ++ b end) |> Enum.uniq()
+    things =
+      cache(state.logfile, state.build_error_cache_path, things)
+      |> Map.values()
+      |> Enum.reduce([], fn a, b -> a ++ b end)
+      |> Enum.uniq()
 
-    case {state.build_error_cache, done_or_wip} do
+    case {state.build_error_cache_path, done_or_wip} do
       # [drathier]: build cache is disabled; print warnings as we go on :wip
-      {nil, :wip} -> process_warnings_impl(state, things3, done_or_wip, :stderr)
+      {nil, :wip} -> process_warnings_impl(state, things, done_or_wip, :stderr)
 
       # [drathier]: build cache is enabled; store warnings, and we'll print them when the build is all :done
-      {_build_error_cache, :done} -> process_warnings_impl(state, things3, done_or_wip, :stderr)
+      {_build_error_cache, :done} -> process_warnings_impl(state, things, done_or_wip, :stderr)
       {_build_error_cache, :wip} -> :wip
     end
   end
