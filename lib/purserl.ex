@@ -506,8 +506,13 @@ defmodule Purserl do
       load_warning_cache(state.logfile, state.build_error_cache_path)
         |> Enum.map(fn {m, l} ->
           case l |> Enum.any?(fn thing -> thing.kind === :error end) do
-            true -> purge_erl_and_beam(m)
-            false -> nil
+            true ->
+              # HACK[em]: If there is an error the compiler should always try
+              # to recompile the file, but for whatever reason it doesn't
+              # unless we force it.
+              purge_erl_and_beam(m)
+            false ->
+              nil
           end
           {m, l |> Enum.filter(fn thing -> thing.kind !== :error end)}
         end)
