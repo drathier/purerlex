@@ -10,6 +10,8 @@ defmodule Purserl do
 
   ###
 
+  @build_cache_version 1
+
   def start(config) do
     case GenServer.start(__MODULE__, config, name: __MODULE__) do
       {:ok, pid} -> {:ok, pid}
@@ -36,6 +38,7 @@ defmodule Purserl do
       port: nil,
       caller: [],
       compile_times: %{},
+      purs_files: config |> Keyword.get(:purs_files, nil),
       purs_cmd: config |> Keyword.get(:purs_cmd, nil),
       extract_cmd: config |> Keyword.get(:purs_cmd, "") == "",
       purs_args: config |> Keyword.get(:purs_args, ""),
@@ -70,6 +73,9 @@ defmodule Purserl do
             end
         end,
       build_error_cache: config |> Keyword.get(:build_error_cache, nil),
+      build_cache_path: config |> Keyword.get(:build_cache, nil),
+      build_cache: nil,
+      available_modules: %{},
       tasks: [],
       module_positions: %{},
       erl_steps: %{},
@@ -285,11 +291,9 @@ defmodule Purserl do
       msg |> String.starts_with?("###") ->
         cond do
           msg == "### launching compiler" ->
-            IO.puts("Compiling ...")
             # NOTE[em]: We don't reset compile times here in order to update
             # them incrementally with new recompiles
-            {:noreply, %{ state | started_at: DateTime.utc_now(),
-                                  module_positions: %{},
+            {:noreply, %{ state | module_positions: %{},
                                   erl_steps: %{} }}
 
           msg == "### read externs" ->
@@ -398,6 +402,10 @@ defmodule Purserl do
 
   defp complete_purs_module(state, nil), do: state
   defp complete_purs_module(state, module) do
+    to_cache = %{
+      purs: hash_file(state.available_modules[module]),
+      erl: hash_erl_dir(Path.join("output", module))
+    }
     %{ state |
         compile_times:
           state.compile_times
@@ -411,8 +419,22 @@ defmodule Purserl do
                   _ -> v
                 end
               end)
-          end)
+          end),
+        build_cache:
+          state.build_cache |> Map.put(module, to_cache)
     }
+  end
+
+  defp hash_file(file) do
+    :crypto.hash(:blake2b, File.read!(file))
+  end
+
+  defp hash_erl_dir(dir) do
+    :crypto.hash(:blake2b,
+      for file <- Path.wildcard("#{dir}/*.erl") |> Enum.sort() do
+        [file, File.read!(file)]
+      end
+      |> :erlang.iolist_to_binary())
   end
 
   @impl true
@@ -439,9 +461,49 @@ defmodule Purserl do
     {:noreply, state}
   end
   def handle_cast({:finish_up, result}, state) do
+    state =
+      state
+      |> update_beam_bashes()
+      |> save_build_cache()
     process_warnings(state)
     print_elapsed(state)
     {:noreply, state |> reply(state.caller, result)}
+  end
+
+  defp get_beam_hashes() do
+    ps = Path.wildcard("#{Mix.Project.compile_path()}/*@ps.beam")
+    foreign = Path.wildcard("#{Mix.Project.compile_path()}/*@foreign.beam")
+    for file <- ps ++ foreign do
+      [_, erl_module, _] = Regex.run(~r/.*\/(.*)@(ps|foreign)\.beam/, file)
+      module =
+        erl_module
+        |> String.split("_")
+        |> Enum.map(fn <<first::utf8, rest::binary>> -> String.upcase(<<first::utf8>>) <> rest end)
+        |> Enum.join(".")
+      {module, file}
+    end
+    |> Enum.sort()
+    |> Enum.group_by(fn {module, _} -> module end, fn {_, file} -> File.read!(file) end)
+    |> then(fn x -> :maps.map(fn (_, file_contents) -> :crypto.hash(:blake2b, :erlang.iolist_to_binary(file_contents)) end, x) end)
+  end
+
+  defp update_beam_bashes(state) do
+    beam_hashes = get_beam_hashes()
+    %{state |
+      build_cache:
+        :maps.map(
+          fn (module, cached) ->
+            # NOTE[em]: We need to default to the previous cache in case of errors (nil values)
+            cached |> Map.put(:beam, :maps.get(module, beam_hashes, cached[:beam]))
+          end,
+          state.build_cache)
+    }
+  end
+
+  defp save_build_cache(state) do
+    File.mkdir_p!(Path.dirname(state.build_cache_path))
+    File.write!(state.build_cache_path, :erlang.term_to_binary({@build_cache_version, state.build_cache}, compressed: 1), [:binary])
+    state
   end
 
   @impl true
@@ -455,6 +517,56 @@ defmodule Purserl do
   end
 
   def handle_call(:recompile, from, state) do
+    IO.puts("Compiling ...")
+    started_at = DateTime.utc_now()
+    # NOTE[em]: Look through the purs files and map them to their respective
+    # modules. We need to do this because the module names may not correspond
+    # to the file names.
+    available_modules =
+      for file <- Path.wildcard(state.purs_files) do
+        [_, _, module] = Regex.run(~r/(^|\n)module\s+(\S+)/, File.read!(file))
+        {module, file}
+      end
+      |> Enum.into(%{})
+
+    # NOTE[em]: Read build cache from disk and handle out of date versions
+    empty_cache = %{}
+    build_cache =
+      case File.read(state.build_cache_path) do
+        {:ok, contents} ->
+          {v, build_cache} = :erlang.binary_to_term(contents)
+          case v === @build_cache_version do
+            true -> build_cache
+            false -> empty_cache
+          end
+        {:error, :enoent} -> empty_cache
+      end
+      |> Map.filter(fn {module, _} -> Map.has_key?(available_modules, module) end)
+
+    beam_hashes = get_beam_hashes()
+    no_source = Map.keys(beam_hashes) -- Map.keys(available_modules)
+    tampered =
+      for module <- Map.keys(available_modules) do
+        case build_cache[module] do
+          nil -> module
+          %{erl: erl, beam: beam} ->
+            case hash_erl_dir(Path.join("output", module)) === erl && beam_hashes[module] === beam do
+              true -> nil
+              false -> module
+            end
+        end
+      end
+      |> Enum.filter(&(&1 !== nil))
+
+    # NOTE[em]: Clean out .beam and .erl files where needed
+    case no_source ++ tampered do
+      [] ->
+        nil
+      to_purge ->
+        IO.puts("Purging #{length(to_purge)} module(s)...")
+        to_purge |> Enum.map(&purge_erl_and_beam/1)
+    end
+
     # NOTE[drathier]: elixir usually only runs one compiler pass at a time, but there are a few (probably unintentional) exceptions which cause total havoc. This case is a workaround for that.
     case state.caller do
       [] ->
@@ -466,11 +578,35 @@ defmodule Purserl do
         :already_running
     end
 
-    {:noreply, %{state | caller: [from | state.caller]}}
+    {:noreply, %{state | caller: [from | state.caller],
+                         build_cache: build_cache,
+                         available_modules: available_modules,
+                         started_at: started_at }}
   end
 
   def handle_call(:compile_times, _from, state) do
     {:reply, state.compile_times, state}
+  end
+
+  defp purge_erl_and_beam(module_string) do
+    # :erlang.display("purging: #{module_string}")
+    module_base =
+      module_string
+      |> String.split(".")
+      |> Enum.map(fn s ->
+        <<first::utf8, rest::binary>> = s
+        String.downcase(<<first::utf8>>) <> rest
+      end)
+      |> Enum.join("_")
+    module = String.to_atom(module_base <> "@ps")
+    foreign = String.to_atom(module_base <> "@foreign")
+    File.rm_rf!("output/#{module_string}")
+    File.rm_rf!(Path.join(Mix.Project.compile_path(), Atom.to_string(module) <> ".beam"))
+    File.rm_rf!(Path.join(Mix.Project.compile_path(), Atom.to_string(foreign) <> ".beam"))
+    :code.purge(module)
+    :code.delete(module)
+    :code.purge(foreign)
+    :code.delete(foreign)
   end
 
   ###
