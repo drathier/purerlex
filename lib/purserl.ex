@@ -80,6 +80,7 @@ defmodule Purserl do
       module_positions: %{},
       erl_steps: %{},
       started_at: nil,
+      previous_errors: [],
     }
 
     log("init", {config, System.get_env()}, state.logfile)
@@ -466,7 +467,7 @@ defmodule Purserl do
       |> update_beam_bashes()
       |> save_build_cache()
     process_warnings(state)
-    strip_errors(state)
+    state = strip_errors(state)
     print_elapsed(state)
     {:noreply, state |> reply(state.caller, result)}
   end
@@ -502,22 +503,25 @@ defmodule Purserl do
   end
 
   def strip_errors(state) do
-    stripped =
+    {errors, warnings} =
       load_warning_cache(state.logfile, state.build_error_cache_path)
-        |> Enum.map(fn {m, l} ->
-          case l |> Enum.any?(fn thing -> thing.kind === :error end) do
-            true ->
-              # HACK[em]: If there is an error the compiler should always try
-              # to recompile the file, but for whatever reason it doesn't
-              # unless we force it.
-              purge_erl_and_beam(m)
-            false ->
-              nil
-          end
-          {m, l |> Enum.filter(fn thing -> thing.kind !== :error end)}
-        end)
-        |> Enum.into(%{})
-    store_warning_cache(state.build_error_cache_path, stripped)
+      |> Enum.map(fn {m, l} ->
+          {{m, l |> Enum.filter(fn thing -> thing.kind === :error end)},
+           {m, l |> Enum.filter(fn thing -> thing.kind !== :error end)}}
+      end)
+      |> Enum.unzip()
+      |> then(fn {errors, warnings} ->
+        {errors |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{}),
+         warnings |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{})}
+      end)
+    for {m, _} <- errors do
+      # HACK[em]: If there is an error the compiler should always try to
+      # recompile the file, but for whatever reason it doesn't unless we force
+      # it.
+      purge_erl_and_beam(m)
+    end
+    store_warning_cache(state.build_error_cache_path, warnings)
+    %{state | previous_errors: errors }
   end
 
   defp save_build_cache(state) do
@@ -852,6 +856,7 @@ defmodule Purserl do
 
   def warnings_to_string(state) do
     things = load_warning_cache(state.logfile, state.build_error_cache_path)
+             |> Map.merge(state.previous_errors, fn _, a, b -> a ++ b end)
              |> Map.values()
              |> Enum.reduce([], fn a, b -> a ++ b end)
              |> Enum.uniq() # |> IO.inspect(label: "things3")
