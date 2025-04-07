@@ -514,12 +514,12 @@ defmodule Purserl do
         {errors |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{}),
          warnings |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{})}
       end)
-    for {m, _} <- errors do
-      # HACK[em]: If there is an error the compiler should always try to
-      # recompile the file, but for whatever reason it doesn't unless we force
-      # it.
-      purge_erl_and_beam(m)
-    end
+
+    # HACK[em]: If there is an error the compiler should always try to
+    # recompile the file, but for whatever reason it doesn't unless we force
+    # it.
+    purge_cache_db((for {m, _} <- errors, do: m))
+
     store_warning_cache(state.build_error_cache_path, warnings)
     %{state | previous_errors: errors }
   end
@@ -631,6 +631,16 @@ defmodule Purserl do
     :code.delete(module)
     :code.purge(foreign)
     :code.delete(foreign)
+  end
+
+  defp purge_cache_db(module_strings) do
+    cache_db =
+      File.read!("output/cache-db.json")
+      |> :json.decode()
+    cache_db =
+      :maps.without(module_strings, cache_db)
+      |> :json.encode()
+    File.write!("output/cache-db.json", cache_db)
   end
 
   ###
