@@ -36,7 +36,7 @@ defmodule Purserl do
 
     state = %{
       port: nil,
-      caller: [],
+      caller: {[], []},
       compile_times: %{},
       purs_files: config |> Keyword.get(:purs_files, nil),
       purs_cmd: config |> Keyword.get(:purs_cmd, nil),
@@ -81,6 +81,7 @@ defmodule Purserl do
       erl_steps: %{},
       started_at: nil,
       previous_errors: [],
+      is_compiling: false,
     }
 
     log("init", {config, System.get_env()}, state.logfile)
@@ -439,6 +440,15 @@ defmodule Purserl do
   end
 
   @impl true
+  def handle_cast({:recompile, from}, state) do
+    case {state.is_compiling, state.caller} do
+      {false, {to_reply, waiting}} ->
+        do_recompile(%{state | caller: {[from|to_reply], waiting}, is_compiling: true})
+      {true, {to_reply, waiting}} ->
+        {:noreply, %{state | caller: {to_reply, [from|waiting]}}}
+    end
+  end
+
   def handle_cast({:erl_step_complete, module}, state) do
     state = %{ state |
       erl_steps:
@@ -469,7 +479,9 @@ defmodule Purserl do
     process_warnings(state)
     state = strip_errors(state)
     print_elapsed(state)
-    {:noreply, state |> reply(state.caller, result)}
+    state = state |> reply(result)
+    trigger_additional_recompiles(state)
+    {:noreply, %{state | is_compiling: false}}
   end
 
   defp get_beam_hashes() do
@@ -540,7 +552,11 @@ defmodule Purserl do
     {:reply, warnings_to_string(state), state}
   end
 
-  def handle_call(:recompile, from, state) do
+  def handle_call(:compile_times, _from, state) do
+    {:reply, state.compile_times, state}
+  end
+
+  def do_recompile(state) do
     IO.puts("Compiling ...")
     started_at = DateTime.utc_now()
     # NOTE[em]: Look through the purs files and map them to their respective
@@ -591,25 +607,12 @@ defmodule Purserl do
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
 
-    # NOTE[drathier]: elixir usually only runs one compiler pass at a time, but there are a few (probably unintentional) exceptions which cause total havoc. This case is a workaround for that.
-    case state.caller do
-      [] ->
-        # NOTE[em]: This is what triggers the compiler
-        _ = port_command(state.port, ~c"sdf\n", [], state)
+    # NOTE[em]: This is what triggers the compiler
+    _ = port_command(state.port, ~c"sdf\n", [], state)
 
-      _ ->
-        # IO.puts(inspect({"[purerlex]: skipping duplicate concurrent recompile", from, state.caller}, width: 2000))
-        :already_running
-    end
-
-    {:noreply, %{state | caller: [from | state.caller],
-                         build_cache: build_cache,
+    {:noreply, %{state | build_cache: build_cache,
                          available_modules: available_modules,
                          started_at: started_at }}
-  end
-
-  def handle_call(:compile_times, _from, state) do
-    {:reply, state.compile_times, state}
   end
 
   defp purge_erl_and_beam(module_string) do
@@ -645,8 +648,19 @@ defmodule Purserl do
 
   ###
 
-  def trigger_recompile(pid) do
-    res = GenServer.call(pid, :recompile, :infinity)
+  def trigger_recompile(sync_or_async) do
+    res =
+      case sync_or_async do
+        :sync ->
+          ref = make_ref()
+          GenServer.cast(__MODULE__, {:recompile, {self(), ref}})
+          receive do
+            {^ref, res} -> res
+          end
+        :async ->
+          spawn(fn -> GenServer.cast(__MODULE__, {:recompile, {self(), make_ref()}}) end)
+          :ok
+      end
 
     case res do
       :ok ->
@@ -2155,8 +2169,16 @@ defmodule Purserl do
     IO.puts("Compilation took #{ms} ms")
   end
 
-  defp reply(state, caller, response) do
-    caller |> Enum.map(fn c -> GenServer.reply(c, response) end)
-    %{state | caller: []}
+  defp reply(state, response) do
+    {replying_to, waiting} = state.caller
+    replying_to |> Enum.map(fn from -> GenServer.reply(from, response) end)
+    %{state | caller: {waiting, []}}
+  end
+
+  defp trigger_additional_recompiles(state) do
+    case state.caller do
+      {[], _} -> nil
+      {_waiting, _} -> trigger_recompile(:async)
+    end
   end
 end
