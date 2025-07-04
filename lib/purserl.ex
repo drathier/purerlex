@@ -860,7 +860,7 @@ defmodule Purserl do
         |> String.replace("/", ".")
       rescue
         e in FunctionClauseError ->
-          runtime_bug(logfile, {:get_filename, e})
+          runtime_bug(logfile, {:get_filename, e, thing})
           # IO.inspect {:get_filename, thing, Map.keys(thing), module_from_first_span}
           "<missing-filename>"
       end
