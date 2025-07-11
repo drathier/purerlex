@@ -207,6 +207,8 @@ defmodule Purserl do
           {true, :yellow, "Purs"}
         :error ->
           {false, :red, "Err "}
+        0 ->
+          {false, :yellow, "Erl "}
         n when is_integer(n) ->
           {false, :green, String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))}
       end
@@ -317,7 +319,9 @@ defmodule Purserl do
             module_name =
               case path_to_changed_file |> String.split("/") do
                 ["output", module | _ ] ->
-                  GenServer.cast(__MODULE__, {:erl_step_complete, module})
+                  if path_to_changed_file |> String.ends_with?(".erl") do
+                    GenServer.cast(__MODULE__, {:erl_step_complete, module})
+                  end
                   module
                 _ ->
                   nil
@@ -404,7 +408,8 @@ defmodule Purserl do
 
   defp complete_purs_module(state, nil), do: state
   defp complete_purs_module(state, module) do
-    %{ state |
+    state = %{ state |
+        erl_steps: state.erl_steps |> Map.put(module, state.erl_steps[module] || 0),
         compile_times:
           state.compile_times
           |> Map.update(module, "err module was not compiled",
@@ -419,6 +424,8 @@ defmodule Purserl do
               end)
           end),
     }
+    print_pretty_status(state, module)
+    state
   end
 
   # defp hash_file(file) do
@@ -447,7 +454,7 @@ defmodule Purserl do
     state = %{ state |
       erl_steps:
         state.erl_steps
-        |> Map.put(module, 1 + (state.erl_steps[module] || 0)),
+        |> Map.put(module, 1 + state.erl_steps[module]),
      compile_times:
        state.compile_times
        |> Map.update(module, "err module was not compiled", fn times -> times |> Map.update(:erl, [], fn l -> [DateTime.utc_now()|l] end) end) }
