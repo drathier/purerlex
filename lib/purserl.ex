@@ -10,7 +10,7 @@ defmodule Purserl do
 
   ###
 
-  @build_cache_version 1
+  @build_cache_version 2
 
   def start(config) do
     case GenServer.start(__MODULE__, config, name: __MODULE__) do
@@ -404,10 +404,6 @@ defmodule Purserl do
 
   defp complete_purs_module(state, nil), do: state
   defp complete_purs_module(state, module) do
-    to_cache = %{
-      purs: hash_file(state.available_modules[module]),
-      erl: hash_erl_dir(Path.join("output", module))
-    }
     %{ state |
         compile_times:
           state.compile_times
@@ -422,22 +418,20 @@ defmodule Purserl do
                 end
               end)
           end),
-        build_cache:
-          state.build_cache |> Map.put(module, to_cache)
     }
   end
 
-  defp hash_file(file) do
-    :crypto.hash(:blake2b, File.read!(file))
-  end
+  # defp hash_file(file) do
+  #   :crypto.hash(:blake2b, File.read!(file))
+  # end
 
-  defp hash_erl_dir(dir) do
-    :crypto.hash(:blake2b,
-      for file <- Path.wildcard("#{dir}/*.erl") |> Enum.sort() do
-        [file, File.read!(file)]
-      end
-      |> :erlang.iolist_to_binary())
-  end
+  # defp hash_erl_dir(dir) do
+  #   :crypto.hash(:blake2b,
+  #     for file <- Path.wildcard("#{dir}/*.erl") |> Enum.sort() do
+  #       [file, File.read!(file)]
+  #     end
+  #     |> :erlang.iolist_to_binary())
+  # end
 
   @impl true
   def handle_cast({:recompile, from}, state) do
@@ -474,7 +468,7 @@ defmodule Purserl do
   def handle_cast({:finish_up, result}, state) do
     state =
       state
-      |> update_beam_bashes()
+      |> update_beam_timestamps()
       |> save_build_cache()
     process_warnings(state)
     state = strip_errors(state)
@@ -484,7 +478,7 @@ defmodule Purserl do
     {:noreply, %{state | is_compiling: false}}
   end
 
-  defp get_beam_hashes() do
+  defp get_beam_timestamps() do
     ps = Path.wildcard("#{Mix.Project.compile_path()}/*@ps.beam")
     foreign = Path.wildcard("#{Mix.Project.compile_path()}/*@foreign.beam")
     for file <- ps ++ foreign do
@@ -497,21 +491,12 @@ defmodule Purserl do
       {module, file}
     end
     |> Enum.sort()
-    |> Enum.group_by(fn {module, _} -> module end, fn {_, file} -> File.read!(file) end)
-    |> then(fn x -> :maps.map(fn (_, file_contents) -> :crypto.hash(:blake2b, :erlang.iolist_to_binary(file_contents)) end, x) end)
+    |> Enum.group_by(fn {module, _} -> module end, fn {_, file} -> File.stat!(file, time: :posix).mtime end)
   end
 
-  defp update_beam_bashes(state) do
-    beam_hashes = get_beam_hashes()
-    %{state |
-      build_cache:
-        :maps.map(
-          fn (module, cached) ->
-            # NOTE[em]: We need to default to the previous cache in case of errors (nil values)
-            cached |> Map.put(:beam, :maps.get(module, beam_hashes, cached[:beam]))
-          end,
-          state.build_cache)
-    }
+  defp update_beam_timestamps(state) do
+    beam_timestamps = get_beam_timestamps()
+    %{state | build_cache: Map.merge(state.build_cache, beam_timestamps)}
   end
 
   def strip_errors(state) do
@@ -562,12 +547,16 @@ defmodule Purserl do
     # NOTE[em]: Look through the purs files and map them to their respective
     # modules. We need to do this because the module names may not correspond
     # to the file names.
+    #dt = DateTime.utc_now()
     available_modules =
       for file <- Path.wildcard(state.purs_files) do
         [_, _, module] = Regex.run(~r/(^|\n)module\s+(\S+)/, File.read!(file))
         {module, file}
       end
       |> Enum.into(%{})
+
+    #IO.puts("Step 1: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
+    #dt = DateTime.utc_now()
 
     # NOTE[em]: Read build cache from disk and handle out of date versions
     empty_cache = %{}
@@ -583,20 +572,27 @@ defmodule Purserl do
       end
       |> Map.filter(fn {module, _} -> Map.has_key?(available_modules, module) end)
 
-    beam_hashes = get_beam_hashes()
-    no_source = Map.keys(beam_hashes) -- Map.keys(available_modules)
+    #IO.puts("Step 2: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
+    #dt = DateTime.utc_now()
+
+    beam_timestamps = get_beam_timestamps()
+    #IO.puts("Step 3: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
+    #dt = DateTime.utc_now()
+    no_source = Map.keys(beam_timestamps) -- Map.keys(available_modules)
     tampered =
       for module <- Map.keys(available_modules) do
         case build_cache[module] do
           nil -> module
-          %{erl: erl, beam: beam} ->
-            case hash_erl_dir(Path.join("output", module)) === erl && beam_hashes[module] === beam do
+          cached ->
+            case beam_timestamps[module] === cached do
               true -> nil
               false -> module
             end
         end
       end
       |> Enum.filter(&(&1 !== nil))
+    #IO.puts("Step 4: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
+    #dt = DateTime.utc_now()
 
     # NOTE[em]: Clean out .beam and .erl files where needed
     case no_source ++ tampered do
@@ -604,11 +600,16 @@ defmodule Purserl do
         nil
       to_purge ->
         # IO.puts("Purging #{length(to_purge)} module(s)...")
+        purge_cache_db(to_purge)
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
+    #IO.puts("Step 5: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
+    #dt = DateTime.utc_now()
 
     # NOTE[em]: This is what triggers the compiler
-    _ = port_command(state.port, ~c"sdf\n", [], state)
+    port_command(state.port, ~c"sdf\n", [], state)
+    #IO.puts("Step 6: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
+    #dt = DateTime.utc_now()
 
     {:noreply, %{state | build_cache: build_cache,
                          available_modules: available_modules,
