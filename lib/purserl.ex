@@ -1089,24 +1089,7 @@ defmodule Purserl do
       xname = x["moduleName"] || x["filename"]
       rhs = " " <> xname <> " ====="
 
-      IO.puts(device,
-        cond do
-          # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
-          true ->
-            ""
-
-          previous == nil ->
-            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
-
-          previous != nil && x["filename"] != previous["filename"] ->
-            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
-
-          # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
-
-          true ->
-            ""
-        end
-      )
+      IO.puts(device, "")
 
       chunk
       |> Enum.map(fn {_, text} -> text end)
