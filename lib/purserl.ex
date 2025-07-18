@@ -709,9 +709,11 @@ defmodule Purserl do
     # st = DateTime.utc_now()
     case :compile.file(source, [:binary, :debug_info, :return_warnings, :return_errors] ++ erlc_options) do
       {:ok, module, binary, warnings} ->
-        # write newly compiled file to disk as beam file
+        # NOTE[em]: When using the :binary option the compiler does not write
+        # the beam files itself, so we handle that here.
         base = source |> Path.basename() |> Path.rootname()
         target_path = Path.join(Mix.Project.compile_path(), base <> ".beam")
+        File.write!(target_path, binary)
 
         log(
           "compile_erlang:compiled_ok",
@@ -719,20 +721,16 @@ defmodule Purserl do
           logfile
         )
 
-        File.write!(target_path, binary)
+        {:module, ^module} = :code.load_binary(module, source, binary)
 
-        # reload in memory
-        log("compile_erlang:purged", {source, retries, target_path}, logfile)
-        {:module, module} = :code.load_binary(module, source, binary)
         log("compile_erlang:loaded", {source, retries, target_path}, logfile)
-        {module, binary}
 
       err ->
         log("compile_erlang:not-ok", {source, retries, err}, logfile)
 
         cond do
           retries <= 10 ->
-            sleep_time = retries * 100
+            sleep_time = 100 + retries * 100
             Process.sleep(sleep_time)
 
             # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
