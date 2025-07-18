@@ -645,13 +645,15 @@ defmodule Purserl do
   end
 
   defp purge_cache_db(module_strings) do
-    cache_db =
-      File.read!("output/cache-db.json")
-      |> :json.decode()
-    cache_db =
-      :maps.without(module_strings, cache_db)
-      |> :json.encode()
-    File.write!("output/cache-db.json", cache_db)
+    case File.read("output/cache-db.json") do
+      {:ok, contents} ->
+        new_cache_db =
+          :maps.without(module_strings, :json.decode(contents))
+          |> :json.encode()
+        File.write!("output/cache-db.json", new_cache_db)
+      err ->
+        err
+    end
   end
 
   ###
