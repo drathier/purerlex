@@ -1083,22 +1083,14 @@ defmodule Purserl do
       |> Enum.chunk_by(fn {x, _} -> x["filename"] end)
 
     to_print_chunked
-    |> List.foldl(nil, fn chunk, previous ->
-      [{x, _} | _] = chunk
-
-      xname = x["moduleName"] || x["filename"]
-      rhs = " " <> xname <> " ====="
-
+    |> Enum.map(fn chunk ->
       IO.puts(device, "")
 
       chunk
-      |> Enum.map(fn {_, text} -> text end)
-      |> Enum.map(fn chunk ->
-        log("print_err_warn_to_stdout", {chunk}, state.logfile)
-        IO.puts(device, chunk)
+      |> Enum.map(fn {_, text} ->
+        log("print_err_warn_to_stdout", {text}, state.logfile)
+        IO.puts(device, text)
       end)
-
-      x
     end)
   end
 
