@@ -10,7 +10,7 @@ defmodule Purserl do
 
   ###
 
-  @build_cache_version 1
+  @build_cache_version 2
 
   def start(config) do
     case GenServer.start(__MODULE__, config, name: __MODULE__) do
@@ -207,6 +207,8 @@ defmodule Purserl do
           {true, :yellow, "Purs"}
         :error ->
           {false, :red, "Err "}
+        0 ->
+          {false, :yellow, "Erl "}
         n when is_integer(n) ->
           {false, :green, String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))}
       end
@@ -317,7 +319,9 @@ defmodule Purserl do
             module_name =
               case path_to_changed_file |> String.split("/") do
                 ["output", module | _ ] ->
-                  GenServer.cast(__MODULE__, {:erl_step_complete, module})
+                  if path_to_changed_file |> String.ends_with?(".erl") do
+                    GenServer.cast(__MODULE__, {:erl_step_complete, module})
+                  end
                   module
                 _ ->
                   nil
@@ -404,11 +408,8 @@ defmodule Purserl do
 
   defp complete_purs_module(state, nil), do: state
   defp complete_purs_module(state, module) do
-    to_cache = %{
-      purs: hash_file(state.available_modules[module]),
-      erl: hash_erl_dir(Path.join("output", module))
-    }
-    %{ state |
+    state = %{ state |
+        erl_steps: state.erl_steps |> Map.put(module, state.erl_steps[module] || 0),
         compile_times:
           state.compile_times
           |> Map.update(module, "err module was not compiled",
@@ -422,21 +423,9 @@ defmodule Purserl do
                 end
               end)
           end),
-        build_cache:
-          state.build_cache |> Map.put(module, to_cache)
     }
-  end
-
-  defp hash_file(file) do
-    :crypto.hash(:blake2b, File.read!(file))
-  end
-
-  defp hash_erl_dir(dir) do
-    :crypto.hash(:blake2b,
-      for file <- Path.wildcard("#{dir}/*.erl") |> Enum.sort() do
-        [file, File.read!(file)]
-      end
-      |> :erlang.iolist_to_binary())
+    print_pretty_status(state, module)
+    state
   end
 
   @impl true
@@ -453,7 +442,7 @@ defmodule Purserl do
     state = %{ state |
       erl_steps:
         state.erl_steps
-        |> Map.put(module, 1 + (state.erl_steps[module] || 0)),
+        |> Map.put(module, 1 + state.erl_steps[module]),
      compile_times:
        state.compile_times
        |> Map.update(module, "err module was not compiled", fn times -> times |> Map.update(:erl, [], fn l -> [DateTime.utc_now()|l] end) end) }
@@ -474,7 +463,7 @@ defmodule Purserl do
   def handle_cast({:finish_up, result}, state) do
     state =
       state
-      |> update_beam_bashes()
+      |> update_beam_timestamps()
       |> save_build_cache()
     process_warnings(state)
     state = strip_errors(state)
@@ -484,7 +473,7 @@ defmodule Purserl do
     {:noreply, %{state | is_compiling: false}}
   end
 
-  defp get_beam_hashes() do
+  defp get_beam_timestamps() do
     ps = Path.wildcard("#{Mix.Project.compile_path()}/*@ps.beam")
     foreign = Path.wildcard("#{Mix.Project.compile_path()}/*@foreign.beam")
     for file <- ps ++ foreign do
@@ -497,21 +486,12 @@ defmodule Purserl do
       {module, file}
     end
     |> Enum.sort()
-    |> Enum.group_by(fn {module, _} -> module end, fn {_, file} -> File.read!(file) end)
-    |> then(fn x -> :maps.map(fn (_, file_contents) -> :crypto.hash(:blake2b, :erlang.iolist_to_binary(file_contents)) end, x) end)
+    |> Enum.group_by(fn {module, _} -> module end, fn {_, file} -> File.stat!(file, time: :posix).mtime end)
   end
 
-  defp update_beam_bashes(state) do
-    beam_hashes = get_beam_hashes()
-    %{state |
-      build_cache:
-        :maps.map(
-          fn (module, cached) ->
-            # NOTE[em]: We need to default to the previous cache in case of errors (nil values)
-            cached |> Map.put(:beam, :maps.get(module, beam_hashes, cached[:beam]))
-          end,
-          state.build_cache)
-    }
+  defp update_beam_timestamps(state) do
+    beam_timestamps = get_beam_timestamps()
+    %{state | build_cache: Map.merge(state.build_cache, beam_timestamps)}
   end
 
   def strip_errors(state) do
@@ -583,14 +563,14 @@ defmodule Purserl do
       end
       |> Map.filter(fn {module, _} -> Map.has_key?(available_modules, module) end)
 
-    beam_hashes = get_beam_hashes()
-    no_source = Map.keys(beam_hashes) -- Map.keys(available_modules)
+    beam_timestamps = get_beam_timestamps()
+    no_source = Map.keys(beam_timestamps) -- Map.keys(available_modules)
     tampered =
       for module <- Map.keys(available_modules) do
         case build_cache[module] do
           nil -> module
-          %{erl: erl, beam: beam} ->
-            case hash_erl_dir(Path.join("output", module)) === erl && beam_hashes[module] === beam do
+          cached ->
+            case beam_timestamps[module] === cached do
               true -> nil
               false -> module
             end
@@ -603,12 +583,12 @@ defmodule Purserl do
       [] ->
         nil
       to_purge ->
-        # IO.puts("Purging #{length(to_purge)} module(s)...")
+        purge_cache_db(to_purge)
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
 
     # NOTE[em]: This is what triggers the compiler
-    _ = port_command(state.port, ~c"sdf\n", [], state)
+    port_command(state.port, ~c"sdf\n", [], state)
 
     {:noreply, %{state | build_cache: build_cache,
                          available_modules: available_modules,
@@ -637,13 +617,15 @@ defmodule Purserl do
   end
 
   defp purge_cache_db(module_strings) do
-    cache_db =
-      File.read!("output/cache-db.json")
-      |> :json.decode()
-    cache_db =
-      :maps.without(module_strings, cache_db)
-      |> :json.encode()
-    File.write!("output/cache-db.json", cache_db)
+    case File.read("output/cache-db.json") do
+      {:ok, contents} ->
+        new_cache_db =
+          :maps.without(module_strings, :json.decode(contents))
+          |> :json.encode()
+        File.write!("output/cache-db.json", new_cache_db)
+      err ->
+        err
+    end
   end
 
   ###
@@ -701,9 +683,11 @@ defmodule Purserl do
     # st = DateTime.utc_now()
     case :compile.file(source, [:binary, :debug_info, :return_warnings, :return_errors] ++ erlc_options) do
       {:ok, module, binary, warnings} ->
-        # write newly compiled file to disk as beam file
+        # NOTE[em]: When using the :binary option the compiler does not write
+        # the beam files itself, so we handle that here.
         base = source |> Path.basename() |> Path.rootname()
         target_path = Path.join(Mix.Project.compile_path(), base <> ".beam")
+        File.write!(target_path, binary)
 
         log(
           "compile_erlang:compiled_ok",
@@ -711,22 +695,16 @@ defmodule Purserl do
           logfile
         )
 
-        File.write!(target_path, binary)
+        {:module, ^module} = :code.load_binary(module, source, binary)
 
-        # reload in memory
-        :code.purge(module)
-        :code.delete(module)
-        log("compile_erlang:purged", {source, retries, target_path}, logfile)
-        {:module, module} = :code.load_binary(module, source, binary)
         log("compile_erlang:loaded", {source, retries, target_path}, logfile)
-        {module, binary}
 
       err ->
         log("compile_erlang:not-ok", {source, retries, err}, logfile)
 
         cond do
           retries <= 10 ->
-            sleep_time = retries * 100
+            sleep_time = 100 + retries * 100
             Process.sleep(sleep_time)
 
             # IO.inspect {"purerlex: likely file system race condition, sleeping for #{sleep_time}ms before retrying erlc call"}
@@ -1077,39 +1055,14 @@ defmodule Purserl do
       |> Enum.chunk_by(fn {x, _} -> x["filename"] end)
 
     to_print_chunked
-    |> List.foldl(nil, fn chunk, previous ->
-      [{x, _} | _] = chunk
-
-      xname = x["moduleName"] || x["filename"]
-      rhs = " " <> xname <> " ====="
-
-      IO.puts(device,
-        cond do
-          # NOTE[drathier]: tried to get some kind of delimiter between errors, but it was too noisy
-          true ->
-            ""
-
-          previous == nil ->
-            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
-
-          previous != nil && x["filename"] != previous["filename"] ->
-            Color.magenta() <> mid_pad("=", "", rhs) <> Color.reset() <> "\n"
-
-          # Color.magenta() <> mid_pad("=", "===== " <> previousname <> " === ^^^ ", rhs) <> Color.reset() <> "\n"
-
-          true ->
-            ""
-        end
-      )
+    |> Enum.map(fn chunk ->
+      IO.puts(device, "")
 
       chunk
-      |> Enum.map(fn {_, text} -> text end)
-      |> Enum.map(fn chunk ->
-        log("print_err_warn_to_stdout", {chunk}, state.logfile)
-        IO.puts(device, chunk)
+      |> Enum.map(fn {_, text} ->
+        log("print_err_warn_to_stdout", {text}, state.logfile)
+        IO.puts(device, text)
       end)
-
-      x
     end)
   end
 
