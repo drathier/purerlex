@@ -428,18 +428,6 @@ defmodule Purserl do
     state
   end
 
-  # defp hash_file(file) do
-  #   :crypto.hash(:blake2b, File.read!(file))
-  # end
-
-  # defp hash_erl_dir(dir) do
-  #   :crypto.hash(:blake2b,
-  #     for file <- Path.wildcard("#{dir}/*.erl") |> Enum.sort() do
-  #       [file, File.read!(file)]
-  #     end
-  #     |> :erlang.iolist_to_binary())
-  # end
-
   @impl true
   def handle_cast({:recompile, from}, state) do
     case {state.is_compiling, state.caller} do
@@ -554,16 +542,12 @@ defmodule Purserl do
     # NOTE[em]: Look through the purs files and map them to their respective
     # modules. We need to do this because the module names may not correspond
     # to the file names.
-    #dt = DateTime.utc_now()
     available_modules =
       for file <- Path.wildcard(state.purs_files) do
         [_, _, module] = Regex.run(~r/(^|\n)module\s+(\S+)/, File.read!(file))
         {module, file}
       end
       |> Enum.into(%{})
-
-    #IO.puts("Step 1: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
-    #dt = DateTime.utc_now()
 
     # NOTE[em]: Read build cache from disk and handle out of date versions
     empty_cache = %{}
@@ -579,12 +563,7 @@ defmodule Purserl do
       end
       |> Map.filter(fn {module, _} -> Map.has_key?(available_modules, module) end)
 
-    #IO.puts("Step 2: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
-    #dt = DateTime.utc_now()
-
     beam_timestamps = get_beam_timestamps()
-    #IO.puts("Step 3: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
-    #dt = DateTime.utc_now()
     no_source = Map.keys(beam_timestamps) -- Map.keys(available_modules)
     tampered =
       for module <- Map.keys(available_modules) do
@@ -598,25 +577,18 @@ defmodule Purserl do
         end
       end
       |> Enum.filter(&(&1 !== nil))
-    #IO.puts("Step 4: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
-    #dt = DateTime.utc_now()
 
     # NOTE[em]: Clean out .beam and .erl files where needed
     case no_source ++ tampered do
       [] ->
         nil
       to_purge ->
-        # IO.puts("Purging #{length(to_purge)} module(s)...")
         purge_cache_db(to_purge)
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
-    #IO.puts("Step 5: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
-    #dt = DateTime.utc_now()
 
     # NOTE[em]: This is what triggers the compiler
     port_command(state.port, ~c"sdf\n", [], state)
-    #IO.puts("Step 6: #{DateTime.diff(DateTime.utc_now(), dt, :millisecond)} ms")
-    #dt = DateTime.utc_now()
 
     {:noreply, %{state | build_cache: build_cache,
                          available_modules: available_modules,
