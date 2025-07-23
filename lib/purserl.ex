@@ -378,7 +378,7 @@ defmodule Purserl do
               msg |> String.contains?(" Compiling ") ->
                 # [ 848 of 1058] Compiling S64 Lesslie.Fortnox.Streams.Storage
                 [step_in_brackets, v_and_mod] = msg |> String.split(" Compiling ", parts: 2)
-                [s_version, module] = v_and_mod |> String.split(" ", parts: 2)
+                [s_version, module|_] = v_and_mod |> String.split(" ")
 
                 module_info = {:maps.size(state.module_positions), step_in_brackets, s_version}
                 state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info),
