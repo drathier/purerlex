@@ -221,7 +221,11 @@ defmodule Purserl do
     move_down =
       case new_line do
         true -> ""
-        false -> String.duplicate(Color.cursor_down(), offset - 1)
+        false ->
+          # NOTE[em]: There used to be a `cursor_down` here instead of a "\n",
+          # but for some reason the behavior of the shell changed in OTP 28 and
+          # broke the verbose output. \n works well in OTP 27 as well.
+          String.duplicate("\n", offset - 1)
       end
     clear =
       case new_line do
