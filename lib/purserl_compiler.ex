@@ -14,10 +14,14 @@ defmodule Mix.Tasks.Compile.Purserl do
     #IO.inspect({"###Mix.Task.Compiler (purserl)", "config", config})
     {:ok, _} = P.start(config)
     #IO.inspect({"###Mix.Task.Compiler (purserl)", "pid", pid})
-    res = P.trigger_recompile(:sync)
-    #IO.inspect({"###Mix.Task.Compiler (purserl)", "res", res})
-    #P.trigger_exit(pid)
-    #IO.inspect({"###Mix.Task.Compiler (purserl)", "shut-down", res})
-    res
+    if System.get_env("PURSERL_SKIP") == "1" do
+      :skipped_purserl
+    else
+      res = P.trigger_recompile(:sync)
+      #IO.inspect({"###Mix.Task.Compiler (purserl)", "res", res})
+      #P.trigger_exit(pid)
+      #IO.inspect({"###Mix.Task.Compiler (purserl)", "shut-down", res})
+      res
+    end
   end
 end
