@@ -547,7 +547,7 @@ defmodule Purserl do
     # modules. We need to do this because the module names may not correspond
     # to the file names.
     available_modules =
-      for file <- Path.wildcard(state.purs_files) do
+      for file <- String.split(state.purs_files) |> Enum.map(&Path.wildcard/1) |> Enum.concat |> Enum.sort |> Enum.dedup do
         [_, _, module] = Regex.run(~r/(^|\n)module\s+(\S+)/, File.read!(file))
         {module, file}
       end
