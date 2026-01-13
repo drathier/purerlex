@@ -41,7 +41,7 @@ defmodule Purserl do
       purs_files: config |> Keyword.get(:purs_files, nil),
       purs_cmd: config |> Keyword.get(:purs_cmd, nil),
       extract_cmd: config |> Keyword.get(:purs_cmd, "") == "",
-      filter_warnings: config |> Keyword.get(:filter_warnings, fn x -> true end),
+      filter_warnings: config |> Keyword.get(:filter_warnings, fn _ -> true end),
       purs_args: config |> Keyword.get(:purs_args, ""),
       ctx_lines_above: config |> Keyword.get(:ctx_lines_above, 3) |> (fn x -> x + 1 end).(),
       ctx_lines_below: config |> Keyword.get(:ctx_lines_below, 3) |> (fn x -> x + 1 end).(),
