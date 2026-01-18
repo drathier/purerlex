@@ -309,13 +309,13 @@ defmodule Purserl do
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 0") ->
-            state = await_tasks(state)
-            GenServer.cast(__MODULE__, {:finish_up, :ok})
+            {res, state} = await_tasks(state, :ok)
+            GenServer.cast(__MODULE__, {:finish_up, res})
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 1") ->
-            state = await_tasks(state)
-            GenServer.cast(__MODULE__, {:finish_up, :err})
+            {res, state} = await_tasks(state, :err)
+            GenServer.cast(__MODULE__, {:finish_up, res})
             {:noreply, state}
 
           msg |> String.starts_with?("### erl-same:") ->
@@ -667,6 +667,11 @@ defmodule Purserl do
             }
           ]
         }
+      {:error, _} ->
+        IO.puts ""
+        IO.puts "^^^  Erlc error, scroll up  ^^^"
+        IO.puts ""
+        res
     end
   end
 
@@ -704,6 +709,11 @@ defmodule Purserl do
 
         log("compile_erlang:loaded", {source, retries, target_path}, logfile)
 
+        receive do
+          {:please_report_result, p, tag} ->
+            send(p, {:reported_result, tag, :ok})
+        end
+
       err ->
         log("compile_erlang:not-ok", {source, retries, err}, logfile)
 
@@ -721,9 +731,27 @@ defmodule Purserl do
             IO.puts("##########################################################")
             IO.puts("Source: #{inspect_full(source)}")
             IO.puts("Retries: #{inspect_full(retries)}")
-            IO.puts("Err: #{inspect_full(err)}")
+            case err do
+              {:error, erlc_errs, erlc_warns} when is_list(erlc_errs) and is_list(erlc_warns) ->
+                IO.puts("Warns:")
+                erlc_warns |> Enum.map(fn row -> inspect(row) end) |> Enum.join("\n") |> IO.puts
+                IO.puts("Errs:")
+                erlc_errs |> Enum.map(fn row -> inspect(row) end) |> Enum.join("\n") |> IO.puts
+              _ -> IO.puts("Err: #{inspect_full(err)}")
+            end
 
-            raise CompileError
+            receive do
+              {:please_report_result, p, tag} ->
+                send(p, {:reported_result, tag, {:error, [%Mix.Task.Compiler.Diagnostic{
+                                file: source,
+                                source: source,
+                                position: 0,
+                                message: "Failed to compile erl file",
+                                severity: :error,
+                                compiler_name: "Purserl-Erlc",
+                                details: inspect_full(err)
+                              }]}})
+            end
         end
     end
     # IO.inspect({DateTime.diff(DateTime.utc_now(), st, :millisecond), source})
@@ -2107,20 +2135,23 @@ defmodule Purserl do
   defp await_task(t) do
     case Process.alive?(t) do
       true ->
-        # IO.puts("Waiting for Erlang compilation to finish ...")
-        ref = Process.monitor(t)
+        send(t, {:please_report_result, self(), t})
         receive do
-          {:DOWN, ^ref, :process, ^t, :normal} -> :ok
+          {:reported_result, ^t, res} -> res
         end
       false ->
+        IO.puts "ERROR task exited without reporting a result! This is likely a bug! #{t}"
         :ok
     end
   end
 
-  defp await_tasks(state) do
-    state.tasks
-    |> Enum.map(fn t -> :ok = await_task(t) end)
-    %{ state | tasks: [] }
+  defp await_tasks(state, res) do
+    res2 =
+      state.tasks
+        |> Enum.map(fn t -> await_task(t) end)
+        |> Enum.filter(fn r -> :ok != r end)
+        |> List.first(res)
+    { res2, %{ state | tasks: [] } }
   end
 
   defp print_elapsed(state) do
