@@ -83,6 +83,7 @@ defmodule Purserl do
       started_at: nil,
       previous_errors: [],
       is_compiling: false,
+      prep_for_recompile_run: false
     }
 
     log("init", {config, System.get_env()}, state.logfile)
@@ -104,6 +105,7 @@ defmodule Purserl do
       run_purs(state)
     end
 
+    state = prep_for_recompile(state)
     {:ok, state}
   end
 
@@ -300,8 +302,7 @@ defmodule Purserl do
       msg |> String.starts_with?("###") ->
         cond do
           msg == "### launching compiler" ->
-            # NOTE[em]: We don't reset compile times here in order to update
-            # them incrementally with new recompiles
+            # NOTE[em]: We don't reset compile times here in order to update them incrementally with new recompiles
             {:noreply, %{ state | module_positions: %{},
                                   erl_steps: %{} }}
 
@@ -310,12 +311,12 @@ defmodule Purserl do
 
           msg |> String.starts_with?("### done compiler: 0") ->
             {res, state} = await_tasks(state, :ok)
-            GenServer.cast(__MODULE__, {:finish_up, res})
+            GenServer.cast(__MODULE__, {:report_result, res})
             {:noreply, state}
 
           msg |> String.starts_with?("### done compiler: 1") ->
             {res, state} = await_tasks(state, :err)
-            GenServer.cast(__MODULE__, {:finish_up, res})
+            GenServer.cast(__MODULE__, {:report_result, res})
             {:noreply, state}
 
           msg |> String.starts_with?("### erl-same:") ->
@@ -465,15 +466,22 @@ defmodule Purserl do
     print_pretty_status(state, module)
     {:noreply, state}
   end
-  def handle_cast({:finish_up, result}, state) do
+  def handle_cast({:report_result, result}, state) do
+    process_warnings(state)
+    print_elapsed(state)
+    state = state |> reply(result)
+    # [drathier]: hot code path over; updating caches can be done in the background. We're still compiling while we finish up! Starting a second compilation before we've finished could corrupt caches!
+    {:noreply, state, {:continue, :finish_up}}
+  end
+
+  @impl true
+  def handle_continue(:finish_up, state) do
     state =
       state
       |> update_beam_timestamps()
       |> save_build_cache()
-    process_warnings(state)
     state = strip_errors(state)
-    print_elapsed(state)
-    state = state |> reply(result)
+    state = prep_for_recompile(state)
     trigger_additional_recompiles(state)
     {:noreply, %{state | is_compiling: false}}
   end
@@ -541,9 +549,7 @@ defmodule Purserl do
     {:reply, state.compile_times, state}
   end
 
-  def do_recompile(state) do
-    IO.puts("Compiling ...")
-    started_at = DateTime.utc_now()
+  defp prep_for_recompile(state) do
     # NOTE[em]: Look through the purs files and map them to their respective
     # modules. We need to do this because the module names may not correspond
     # to the file names.
@@ -591,13 +597,21 @@ defmodule Purserl do
         purge_cache_db(to_purge)
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
+    %{state | build_cache: build_cache, available_modules: available_modules, prep_for_recompile_run: true }
+  end
 
+  def do_recompile(state) do
+    IO.puts("Compiling ...")
+    started_at = DateTime.utc_now()
+    #state = prep_for_recompile(state)
     # NOTE[em]: This is what triggers the compiler
-    port_command(state.port, ~c"sdf\n", [], state)
 
-    {:noreply, %{state | build_cache: build_cache,
-                         available_modules: available_modules,
-                         started_at: started_at }}
+    case state.prep_for_recompile_run do
+      false -> runtime_bug(state.logfile, {"[drathier]: prep_for_recompile must run before each compilation, this is a bug"})
+      true -> nil
+    end
+    port_command(state.port, ~c"sdf\n", [], state)
+    {:noreply, %{state | started_at: started_at, prep_for_recompile_run: false }}
   end
 
   defp purge_erl_and_beam(module_string) do
