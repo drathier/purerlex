@@ -708,7 +708,7 @@ defmodule Purserl do
         log("compile_erlang:not-ok", {source, retries, err}, logfile)
 
         cond do
-          retries <= 10 ->
+          retries < 3 ->
             sleep_time = 100 + retries * 100
             Process.sleep(sleep_time)
 
