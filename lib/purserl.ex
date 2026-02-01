@@ -578,8 +578,15 @@ defmodule Purserl do
     # to the file names.
     available_modules =
       for file <- String.split(state.purs_files) |> Enum.map(&Path.wildcard/1) |> Enum.concat() |> Enum.sort() |> Enum.dedup() do
-        [_, _, module] = Regex.run(~r/(^|\n)module\s+(\S+)/, File.read!(file))
-        {module, file}
+        case Regex.run(~r/(^|\n)module\s+(\S+)/, File.read!(file)) do
+          [_, _, module] -> {module, file}
+          nil ->
+            IO.puts("====================================================")
+            IO.puts("Failed to regex out the module name from this file: " <> inspect(file))
+            IO.puts("Is it an empty file? Malformed somehow?")
+            IO.puts("====================================================")
+            0/0
+        end
       end
       |> Enum.into(%{})
 
