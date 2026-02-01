@@ -1297,7 +1297,15 @@ defmodule Purserl do
           short_tag <>
             " " <>
             Color.cyan() <>
-            error_code <> Color.reset() <> " " <> format_path_with_line(filename, start_line)
+            error_code <> Color.reset() <> " " <> format_path_with_line(filename, start_line) <> "\t" <>
+              (snippets
+                |> List.first
+                |> String.split("\n")
+                |> Enum.drop(1)
+                |> List.first
+                |> String.slice(13..-1//1)
+                |> String.trim_leading()
+              )
         else
           (Color.cyan() <>
              error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
