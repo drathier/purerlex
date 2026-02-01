@@ -66,8 +66,7 @@ defmodule Purserl do
               err ->
                 runtime_bug(
                   nil,
-                  {"purerlex: failed to create folders or open file, disabling debug logging",
-                   {:logfile_path, path}, {:err, err}}
+                  {"purerlex: failed to create folders or open file, disabling debug logging", {:logfile_path, path}, {:err, err}}
                 )
 
                 nil
@@ -99,11 +98,12 @@ defmodule Purserl do
     # files |> Enum.map(fn x -> compile_erlang(x) end)
     # IO.inspect({:done_prebuild_erlc, files})
 
-    {:ok, state} = if state.purs_cmd == nil do
-      start_spago(state)
-    else
-      run_purs(state)
-    end
+    {:ok, state} =
+      if state.purs_cmd == nil do
+        start_spago(state)
+      else
+        run_purs(state)
+      end
 
     state = prep_for_recompile(state)
     {:ok, state}
@@ -202,34 +202,45 @@ defmodule Purserl do
       nil -> nil
     end
   end
+
   def print_pretty_status(state, {pos, step_in_brackets, s_version}, module) do
     rows = :maps.size(state.module_positions)
+
     {new_line, color, label} =
       case state.erl_steps[module] do
         nil ->
           {true, :yellow, "Purs"}
+
         :error ->
           {false, :red, "Err "}
+
         0 ->
           {false, :yellow, "Erl "}
+
         n when is_integer(n) ->
           {false, :green, String.duplicate("*", min(n, 4)) <> String.duplicate(" ", 4 - min(n, 4))}
       end
+
     offset = rows - pos
+
     move_up =
       case new_line do
         true -> ""
         false -> String.duplicate(Color.cursor_up(), offset)
       end
+
     move_down =
       case new_line do
-        true -> ""
+        true ->
+          ""
+
         false ->
           # NOTE[em]: There used to be a `cursor_down` here instead of a "\n",
           # but for some reason the behavior of the shell changed in OTP 28 and
           # broke the verbose output. \n works well in OTP 27 as well.
           String.duplicate("\n", offset - 1)
       end
+
     clear =
       case new_line do
         true -> ""
@@ -239,10 +250,10 @@ defmodule Purserl do
     verbose = not Enum.member?(["", "0", "false"], System.get_env("PURERLEX_VERBOSE", ""))
 
     max_length =
-        case :io.columns() do
-          {:ok, cols} -> cols
-          {:error, :enotsup} -> 10000
-        end
+      case :io.columns() do
+        {:ok, cols} -> cols
+        {:error, :enotsup} -> 10000
+      end
 
     # NOTE[em]: It is a bit complex to calculate what should be output since
     # the IO device may shrink and we also need to color some parts. Colors
@@ -251,11 +262,13 @@ defmodule Purserl do
       [step_in_brackets, " ", s_version, " ", label, " ", module]
       |> Enum.reduce({max_length, []}, fn s, {remaining, acc} ->
         sliced = String.slice(s, 0, remaining)
+
         out =
           case s do
             ^label -> Color.format([color, sliced])
             _ -> sliced
           end
+
         {remaining - String.length(sliced), [out | acc]}
       end)
       |> elem(1)
@@ -303,8 +316,7 @@ defmodule Purserl do
         cond do
           msg == "### launching compiler" ->
             # NOTE[em]: We don't reset compile times here in order to update them incrementally with new recompiles
-            {:noreply, %{ state | module_positions: %{},
-                                  erl_steps: %{} }}
+            {:noreply, %{state | module_positions: %{}, erl_steps: %{}}}
 
           msg == "### read externs" ->
             {:noreply, state}
@@ -320,15 +332,17 @@ defmodule Purserl do
             {:noreply, state}
 
           msg |> String.starts_with?("### erl-same:") ->
-
             "### erl-same:" <> path_to_changed_file = msg
+
             module_name =
               case path_to_changed_file |> String.split("/") do
-                ["output", module | _ ] ->
+                ["output", module | _] ->
                   if path_to_changed_file |> String.ends_with?(".erl") do
                     GenServer.cast(__MODULE__, {:erl_step_complete, module})
                   end
+
                   module
+
                 _ ->
                   nil
               end
@@ -336,25 +350,26 @@ defmodule Purserl do
             {:noreply, state |> complete_purs_module(module_name)}
 
           msg |> String.starts_with?("### erl-diff:") ->
-
             "### erl-diff:" <> path_to_changed_file = msg
 
             module_name =
               case path_to_changed_file |> String.split("/") do
-                ["output", module | _ ] ->
+                ["output", module | _] ->
                   module
+
                 _ ->
                   nil
               end
 
             # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
-            state = cond do
-              path_to_changed_file |> String.ends_with?(".erl") ->
-                %{ state | tasks: [spawn_link(__MODULE__, :compile_erlang, [path_to_changed_file, module_name, state.logfile])|state.tasks] }
+            state =
+              cond do
+                path_to_changed_file |> String.ends_with?(".erl") ->
+                  %{state | tasks: [spawn_link(__MODULE__, :compile_erlang, [path_to_changed_file, module_name, state.logfile]) | state.tasks]}
 
-              true ->
-                state
-            end
+                true ->
+                  state
+              end
 
             {:noreply, state |> complete_purs_module(module_name)}
 
@@ -380,11 +395,10 @@ defmodule Purserl do
               msg |> String.contains?(" Compiling ") ->
                 # [ 848 of 1058] Compiling S64 Lesslie.Fortnox.Streams.Storage
                 [step_in_brackets, v_and_mod] = msg |> String.split(" Compiling ", parts: 2)
-                [s_version, module|_] = v_and_mod |> String.split(" ")
+                [s_version, module | _] = v_and_mod |> String.split(" ")
 
                 module_info = {:maps.size(state.module_positions), step_in_brackets, s_version}
-                state = %{ state | module_positions: state.module_positions |> Map.put(module, module_info),
-                                   compile_times: state.compile_times |> Map.put(module, %{ start: DateTime.utc_now(), end: nil, erl: [] })}
+                state = %{state | module_positions: state.module_positions |> Map.put(module, module_info), compile_times: state.compile_times |> Map.put(module, %{start: DateTime.utc_now(), end: nil, erl: []})}
                 print_pretty_status(state, module)
 
                 # IO.inspect {:s_version, s_version, :module, module}
@@ -413,23 +427,24 @@ defmodule Purserl do
   end
 
   defp complete_purs_module(state, nil), do: state
+
   defp complete_purs_module(state, module) do
-    state = %{ state |
-        erl_steps: state.erl_steps |> Map.put(module, state.erl_steps[module] || 0),
+    state = %{
+      state
+      | erl_steps: state.erl_steps |> Map.put(module, state.erl_steps[module] || 0),
         compile_times:
           state.compile_times
-          |> Map.update(module, "err module was not compiled",
-          fn times ->
+          |> Map.update(module, "err module was not compiled", fn times ->
             times
-            |> Map.update(:end, nil,
-              fn v ->
-                case v do
-                  nil -> DateTime.utc_now()
-                  _ -> v
-                end
-              end)
-          end),
+            |> Map.update(:end, nil, fn v ->
+              case v do
+                nil -> DateTime.utc_now()
+                _ -> v
+              end
+            end)
+          end)
     }
+
     print_pretty_status(state, module)
     state
   end
@@ -438,20 +453,24 @@ defmodule Purserl do
   def handle_cast({:recompile, from}, state) do
     case {state.is_compiling, state.caller} do
       {false, {to_reply, waiting}} ->
-        do_recompile(%{state | caller: {[from|to_reply], waiting}, is_compiling: true})
+        do_recompile(%{state | caller: {[from | to_reply], waiting}, is_compiling: true})
+
       {true, {to_reply, waiting}} ->
-        {:noreply, %{state | caller: {to_reply, [from|waiting]}}}
+        {:noreply, %{state | caller: {to_reply, [from | waiting]}}}
     end
   end
 
   def handle_cast({:erl_step_complete, module}, state) do
-    state = %{ state |
-      erl_steps:
-        state.erl_steps
-        |> Map.put(module, 1 + state.erl_steps[module]),
-     compile_times:
-       state.compile_times
-       |> Map.update(module, "err module was not compiled", fn times -> times |> Map.update(:erl, [], fn l -> [DateTime.utc_now()|l] end) end) }
+    state = %{
+      state
+      | erl_steps:
+          state.erl_steps
+          |> Map.put(module, 1 + state.erl_steps[module]),
+        compile_times:
+          state.compile_times
+          |> Map.update(module, "err module was not compiled", fn times -> times |> Map.update(:erl, [], fn l -> [DateTime.utc_now() | l] end) end)
+    }
+
     print_pretty_status(state, module)
     {:noreply, state}
   end
@@ -460,12 +479,14 @@ defmodule Purserl do
   # has happened when trying to import somthing from a file which doesn't exist.
   # `import A (b)` <- If b doesn't exist.
   def handle_cast({:got_error, nil}, state), do: {:noreply, state}
+
   def handle_cast({:got_error, module}, state) do
     # HACK[em]: We are using erl_steps here for purs error handling. It works surprisingly well though...
-    state = %{ state | erl_steps: state.erl_steps |> Map.put(module, :error) }
+    state = %{state | erl_steps: state.erl_steps |> Map.put(module, :error)}
     print_pretty_status(state, module)
     {:noreply, state}
   end
+
   def handle_cast({:report_result, result}, state) do
     process_warnings(state)
     print_elapsed(state)
@@ -480,6 +501,7 @@ defmodule Purserl do
       state
       |> update_beam_timestamps()
       |> save_build_cache()
+
     state = strip_errors(state)
     state = prep_for_recompile(state)
     trigger_additional_recompiles(state)
@@ -489,13 +511,16 @@ defmodule Purserl do
   defp get_beam_timestamps() do
     ps = Path.wildcard("#{Mix.Project.compile_path()}/*@ps.beam")
     foreign = Path.wildcard("#{Mix.Project.compile_path()}/*@foreign.beam")
+
     for file <- ps ++ foreign do
       [_, erl_module, _] = Regex.run(~r/.*\/(.*)@(ps|foreign)\.beam/, file)
+
       module =
         erl_module
         |> String.split("_")
         |> Enum.map(fn <<first::utf8, rest::binary>> -> String.upcase(<<first::utf8>>) <> rest end)
         |> Enum.join(".")
+
       {module, file}
     end
     |> Enum.sort()
@@ -511,22 +536,20 @@ defmodule Purserl do
     {errors, warnings} =
       load_warning_cache(state.logfile, state.build_error_cache_path)
       |> Enum.map(fn {m, l} ->
-          {{m, l |> Enum.filter(fn thing -> thing.kind === :error end)},
-           {m, l |> Enum.filter(fn thing -> thing.kind !== :error end)}}
+        {{m, l |> Enum.filter(fn thing -> thing.kind === :error end)}, {m, l |> Enum.filter(fn thing -> thing.kind !== :error end)}}
       end)
       |> Enum.unzip()
       |> then(fn {errors, warnings} ->
-        {errors |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{}),
-         warnings |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{})}
+        {errors |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{}), warnings |> Enum.filter(fn {_, l} -> l !== [] end) |> Enum.into(%{})}
       end)
 
     # HACK[em]: If there is an error the compiler should always try to
     # recompile the file, but for whatever reason it doesn't unless we force
     # it.
-    purge_cache_db((for {m, _} <- errors, do: m))
+    purge_cache_db(for {m, _} <- errors, do: m)
 
     store_warning_cache(state.build_error_cache_path, warnings)
-    %{state | previous_errors: errors }
+    %{state | previous_errors: errors}
   end
 
   defp save_build_cache(state) do
@@ -554,7 +577,7 @@ defmodule Purserl do
     # modules. We need to do this because the module names may not correspond
     # to the file names.
     available_modules =
-      for file <- String.split(state.purs_files) |> Enum.map(&Path.wildcard/1) |> Enum.concat |> Enum.sort |> Enum.dedup do
+      for file <- String.split(state.purs_files) |> Enum.map(&Path.wildcard/1) |> Enum.concat() |> Enum.sort() |> Enum.dedup() do
         [_, _, module] = Regex.run(~r/(^|\n)module\s+(\S+)/, File.read!(file))
         {module, file}
       end
@@ -562,24 +585,31 @@ defmodule Purserl do
 
     # NOTE[em]: Read build cache from disk and handle out of date versions
     empty_cache = %{}
+
     build_cache =
       case File.read(state.build_cache_path) do
         {:ok, contents} ->
           {v, build_cache} = :erlang.binary_to_term(contents)
+
           case v === @build_cache_version do
             true -> build_cache
             false -> empty_cache
           end
-        {:error, :enoent} -> empty_cache
+
+        {:error, :enoent} ->
+          empty_cache
       end
       |> Map.filter(fn {module, _} -> Map.has_key?(available_modules, module) end)
 
     beam_timestamps = get_beam_timestamps()
     no_source = Map.keys(beam_timestamps) -- Map.keys(available_modules)
+
     tampered =
       for module <- Map.keys(available_modules) do
         case build_cache[module] do
-          nil -> module
+          nil ->
+            module
+
           cached ->
             case beam_timestamps[module] === cached do
               true -> nil
@@ -593,25 +623,28 @@ defmodule Purserl do
     case no_source ++ tampered do
       [] ->
         nil
+
       to_purge ->
         purge_cache_db(to_purge)
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
-    %{state | build_cache: build_cache, available_modules: available_modules, prep_for_recompile_run: true }
+
+    %{state | build_cache: build_cache, available_modules: available_modules, prep_for_recompile_run: true}
   end
 
   def do_recompile(state) do
     IO.puts("Compiling ...")
     started_at = DateTime.utc_now()
-    #state = prep_for_recompile(state)
+    # state = prep_for_recompile(state)
     # NOTE[em]: This is what triggers the compiler
 
     case state.prep_for_recompile_run do
       false -> runtime_bug(state.logfile, {"[drathier]: prep_for_recompile must run before each compilation, this is a bug"})
       true -> nil
     end
+
     port_command(state.port, ~c"sdf\n", [], state)
-    {:noreply, %{state | started_at: started_at, prep_for_recompile_run: false }}
+    {:noreply, %{state | started_at: started_at, prep_for_recompile_run: false}}
   end
 
   defp purge_erl_and_beam(module_string) do
@@ -624,6 +657,7 @@ defmodule Purserl do
         String.downcase(<<first::utf8>>) <> rest
       end)
       |> Enum.join("_")
+
     module = String.to_atom(module_base <> "@ps")
     foreign = String.to_atom(module_base <> "@foreign")
     File.rm_rf!("output/#{module_string}")
@@ -641,7 +675,9 @@ defmodule Purserl do
         new_cache_db =
           :maps.without(module_strings, :json.decode(contents))
           |> :json.encode()
+
         File.write!("output/cache-db.json", new_cache_db)
+
       err ->
         err
     end
@@ -655,9 +691,11 @@ defmodule Purserl do
         :sync ->
           ref = make_ref()
           GenServer.cast(__MODULE__, {:recompile, {self(), ref}})
+
           receive do
             {^ref, res} -> res
           end
+
         :async ->
           spawn(fn -> GenServer.cast(__MODULE__, {:recompile, {self(), make_ref()}}) end)
           :ok
@@ -681,10 +719,11 @@ defmodule Purserl do
             }
           ]
         }
+
       {:error, _} ->
-        IO.puts ""
-        IO.puts "^^^  Erlc error, scroll up  ^^^"
-        IO.puts ""
+        IO.puts("")
+        IO.puts("^^^  Erlc error, scroll up  ^^^")
+        IO.puts("")
         res
     end
   end
@@ -745,29 +784,40 @@ defmodule Purserl do
             IO.puts("##########################################################")
             IO.puts("Source: #{inspect_full(source)}")
             IO.puts("Retries: #{inspect_full(retries)}")
+
             case err do
               {:error, erlc_errs, erlc_warns} when is_list(erlc_errs) and is_list(erlc_warns) ->
                 IO.puts("Warns:")
-                erlc_warns |> Enum.map(fn row -> inspect(row) end) |> Enum.join("\n") |> IO.puts
+                erlc_warns |> Enum.map(fn row -> inspect(row) end) |> Enum.join("\n") |> IO.puts()
                 IO.puts("Errs:")
-                erlc_errs |> Enum.map(fn row -> inspect(row) end) |> Enum.join("\n") |> IO.puts
-              _ -> IO.puts("Err: #{inspect_full(err)}")
+                erlc_errs |> Enum.map(fn row -> inspect(row) end) |> Enum.join("\n") |> IO.puts()
+
+              _ ->
+                IO.puts("Err: #{inspect_full(err)}")
             end
 
             receive do
               {:please_report_result, p, tag} ->
-                send(p, {:reported_result, tag, {:error, [%Mix.Task.Compiler.Diagnostic{
-                                file: source,
-                                source: source,
-                                position: 0,
-                                message: "Failed to compile erl file",
-                                severity: :error,
-                                compiler_name: "Purserl-Erlc",
-                                details: inspect_full(err)
-                              }]}})
+                send(
+                  p,
+                  {:reported_result, tag,
+                   {:error,
+                    [
+                      %Mix.Task.Compiler.Diagnostic{
+                        file: source,
+                        source: source,
+                        position: 0,
+                        message: "Failed to compile erl file",
+                        severity: :error,
+                        compiler_name: "Purserl-Erlc",
+                        details: inspect_full(err)
+                      }
+                    ]}}
+                )
             end
         end
     end
+
     # IO.inspect({DateTime.diff(DateTime.utc_now(), st, :millisecond), source})
 
     case module_name do
@@ -904,11 +954,13 @@ defmodule Purserl do
   end
 
   def warnings_to_string(state) do
-    things = load_warning_cache(state.logfile, state.build_error_cache_path)
-             |> Map.merge(state.previous_errors, fn _, a, b -> a ++ b end)
-             |> Map.values()
-             |> Enum.reduce([], fn a, b -> a ++ b end)
-             |> Enum.uniq() # |> IO.inspect(label: "things3")
+    things =
+      load_warning_cache(state.logfile, state.build_error_cache_path)
+      |> Map.merge(state.previous_errors, fn _, a, b -> a ++ b end)
+      |> Map.values()
+      |> Enum.reduce([], fn a, b -> a ++ b end)
+      # |> IO.inspect(label: "things3")
+      |> Enum.uniq()
 
     {:ok, pid} = StringIO.open("")
     process_warnings_impl(state, things, :done, pid)
@@ -917,6 +969,7 @@ defmodule Purserl do
   end
 
   def process_warnings(state), do: process_warnings(state, [], [], :done)
+
   def process_warnings(state, warnings, errors, done_or_wip) do
     things =
       (errors
@@ -937,7 +990,6 @@ defmodule Purserl do
     case {state.build_error_cache_path, done_or_wip} do
       # [drathier]: build cache is disabled; print warnings as we go on :wip
       {nil, :wip} -> process_warnings_impl(state, things, done_or_wip, :stderr)
-
       # [drathier]: build cache is enabled; store warnings, and we'll print them when the build is all :done
       {_build_error_cache, :done} -> process_warnings_impl(state, things, done_or_wip, :stderr)
       {_build_error_cache, :wip} -> :wip
@@ -1012,8 +1064,7 @@ defmodule Purserl do
           }
         } = x
 
-        {error_kind_ord(state.logfile, x), filename, start_line, start_column, end_line,
-         end_column}
+        {error_kind_ord(state.logfile, x), filename, start_line, start_column, end_line, end_column}
       end)
 
     file_contents_map =
@@ -1207,9 +1258,7 @@ defmodule Purserl do
                   |> String.trim_trailing()
 
                 common_prefix =
-                  get_common_line_prefix(
-                    snippet_context_pre <> snippet_actual <> snippet_context_post
-                  )
+                  get_common_line_prefix(snippet_context_pre <> snippet_actual <> snippet_context_post)
 
                 code_snippet_with_context =
                   ((snippet_context_pre
@@ -1232,9 +1281,7 @@ defmodule Purserl do
               _ ->
                 runtime_bug(
                   state.logfile,
-                  {"###", "UNEXPECTED_SNIPPET_FORMAT",
-                   "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-                   kind, inp}
+                  {"###", "UNEXPECTED_SNIPPET_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp}
                 )
 
                 ""
@@ -1259,9 +1306,7 @@ defmodule Purserl do
             _ ->
               runtime_bug(
                 state.logfile,
-                {"###", "UNEXPECTED_ERROR_KIND",
-                 "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-                 kind, inp}
+                {"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp}
               )
 
               ""
@@ -1285,9 +1330,7 @@ defmodule Purserl do
             _ ->
               runtime_bug(
                 state.logfile,
-                {"###", "UNEXPECTED_ERROR_KIND",
-                 "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-                 kind, inp}
+                {"###", "UNEXPECTED_ERROR_KIND", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp}
               )
 
               ""
@@ -1297,15 +1340,18 @@ defmodule Purserl do
           short_tag <>
             " " <>
             Color.cyan() <>
-            error_code <> Color.reset() <> " " <> format_path_with_line(filename, start_line) <> "\t" <>
-              (snippets
-                |> List.first
-                |> String.split("\n")
-                |> Enum.drop(1)
-                |> List.first
-                |> String.slice(13..-1//1)
-                |> String.trim_leading()
-              )
+            error_code <>
+            Color.reset() <>
+            " " <>
+            format_path_with_line(filename, start_line) <>
+            "\t" <>
+            (snippets
+             |> List.first()
+             |> String.split("\n")
+             |> Enum.drop(1)
+             |> List.first()
+             |> String.slice(13..-1//1)
+             |> String.trim_leading())
         else
           (Color.cyan() <>
              error_code <> Color.reset() <> " " <> tag <> " " <> modu <> "\n") <>
@@ -1319,9 +1365,7 @@ defmodule Purserl do
       _ ->
         runtime_bug(
           state.logfile,
-          {"###", "UNEXPECTED_WARN_FORMAT",
-           "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-           kind, inp}
+          {"###", "UNEXPECTED_WARN_FORMAT", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", kind, inp}
         )
 
         ""
@@ -2074,9 +2118,7 @@ defmodule Purserl do
       _ ->
         runtime_bug(
           logfile,
-          {"###", "UNHANDLED_SUGGESTION_TAG",
-           "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new",
-           x}
+          {"###", "UNHANDLED_SUGGESTION_TAG", "please post this dump to the purerlex developers at https://github.com/drathier/purerlex/issues/new", x}
         )
 
         :warn_msg
@@ -2158,11 +2200,13 @@ defmodule Purserl do
     case Process.alive?(t) do
       true ->
         send(t, {:please_report_result, self(), t})
+
         receive do
           {:reported_result, ^t, res} -> res
         end
+
       false ->
-        IO.puts "ERROR task exited without reporting a result! This is likely a bug! #{t}"
+        IO.puts("ERROR task exited without reporting a result! This is likely a bug! #{t}")
         :ok
     end
   end
@@ -2170,10 +2214,11 @@ defmodule Purserl do
   defp await_tasks(state, res) do
     res2 =
       state.tasks
-        |> Enum.map(fn t -> await_task(t) end)
-        |> Enum.filter(fn r -> :ok != r end)
-        |> List.first(res)
-    { res2, %{ state | tasks: [] } }
+      |> Enum.map(fn t -> await_task(t) end)
+      |> Enum.filter(fn r -> :ok != r end)
+      |> List.first(res)
+
+    {res2, %{state | tasks: []}}
   end
 
   defp print_elapsed(state) do
