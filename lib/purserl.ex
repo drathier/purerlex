@@ -81,6 +81,8 @@ defmodule Purserl do
       erl_steps: %{},
       started_at: nil,
       previous_errors: [],
+      on_erlc_rebuild: config |> Keyword.get(:on_erlc_rebuild, nil),
+      rebuilt_erl_files: [],
       is_compiling: false,
       prep_for_recompile_run: false
     }
@@ -352,20 +354,20 @@ defmodule Purserl do
           msg |> String.starts_with?("### erl-diff:") ->
             "### erl-diff:" <> path_to_changed_file = msg
 
-            module_name =
+            {module_name, erl_module} =
               case path_to_changed_file |> String.split("/") do
-                ["output", module | _] ->
-                  module
+                ["output", module, erl_module | _] ->
+                  {module, erl_module |> String.replace_suffix(".erl", "")}
 
                 _ ->
-                  nil
+                  {nil, nil}
               end
 
             # calling erlang compiler on files as we go; purs will continue running in its own thread and we'll read its next output when we're done compiling this file. This hopefully and apparently speeds up erlang compilation.
             state =
               cond do
                 path_to_changed_file |> String.ends_with?(".erl") ->
-                  %{state | tasks: [spawn_link(__MODULE__, :compile_erlang, [path_to_changed_file, module_name, state.logfile]) | state.tasks]}
+                  %{state | tasks: [spawn_link(__MODULE__, :compile_erlang, [path_to_changed_file, module_name, state.logfile]) | state.tasks], rebuilt_erl_files: [%{path: path_to_changed_file, purs_modu: module_name, erl_modu: String.to_atom(erl_module)}|state.rebuilt_erl_files]}
 
                 true ->
                   state
@@ -488,6 +490,10 @@ defmodule Purserl do
   end
 
   def handle_cast({:report_result, result}, state) do
+    case is_function(state.on_erlc_rebuild) do
+      true -> state.on_erlc_rebuild.(state.rebuilt_erl_files)
+      false -> nil
+    end
     process_warnings(state)
     print_elapsed(state)
     state = state |> reply(result)
@@ -636,7 +642,7 @@ defmodule Purserl do
         to_purge |> Enum.map(&purge_erl_and_beam/1)
     end
 
-    %{state | build_cache: build_cache, available_modules: available_modules, prep_for_recompile_run: true}
+    %{state | build_cache: build_cache, available_modules: available_modules, rebuilt_erl_files: [], prep_for_recompile_run: true}
   end
 
   def do_recompile(state) do
